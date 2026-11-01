@@ -1,0 +1,12 @@
+foreach source {
+    swim2_control.sv swim2_data.sv swim2.sv swim2_timing.sv
+    swim2_drive.sv swim2_mfm_write.sv swim2_write_commit.sv
+    swim2_media.sv swim2_subsystem.sv swim2_persistence.sv
+    swim2_host.sv swim2_host_persistence.sv swim2_host_read.sv
+    swim2_host_control.sv swim2_loader.sv swim2_memory.sv
+    swim2_storage.sv swim2_platform.sv
+    swim2_media/mfm_track_encoder.v swim2_media/mfm_write_decoder.v
+    swim2_media/floppy_track_encoder.v swim2_media/floppy_track_decoder.v
+} {
+    set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) $source]
+}

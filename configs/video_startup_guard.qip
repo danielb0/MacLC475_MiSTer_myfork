@@ -1,0 +1,17 @@
+set guard_root [file normalize [file join $::quartus(qip_path) ..]]
+source [file join $guard_root scripts video_startup_guard.tcl]
+set guard_output [file join $guard_root local generated cpu040]
+generate_video_startup_guard $guard_root $guard_output
+
+set guard_sys "[file join $guard_root sys]/"
+set guard_input [open [file join $guard_sys sys.qip] r]
+set guard_qip [read $guard_input]
+close $guard_input
+set guard_original {[file join $::quartus(qip_path) sysmem.sv ]}
+if {[string first $guard_original $guard_qip] < 0} {
+    error "Video startup guard: stock sysmem assignment not found"
+}
+set guard_qip [string map [list \
+    $guard_original {[file join $guard_output sysmem_video_startup.sv]} \
+    {$::quartus(qip_path)} {$guard_sys}] $guard_qip]
+eval $guard_qip
