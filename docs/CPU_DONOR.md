@@ -1,6 +1,6 @@
 # CPU donor tracker
 
-Status: prepare small33 as the next isolated import candidate.
+Status: small33 imported on `codex/small33-lc040`; qualification pending.
 Updated: 2026-11-01.
 
 ## Intent
@@ -23,13 +23,13 @@ Expect a future donor replacement, rather than tracking every optimization.
 
 ## Targets
 
-- Current cpu040 donor: Alan's `pipelined-040-66mhz-timing` at
+- Reference on `main`: Alan's `pipelined-040-66mhz-timing` at
   `eefa4aa8df9b57ee19791a14be2f728243d50fca`, with local LC040 adaptations.
   Optional predictor/timing features are already disabled.
 - Candidate: Alan recommends `pipelined-040-small33` for size/headroom.
   Audited tip: `82122463f51cc22d61164aa343178188cb225953`, 38 commits beyond
-  our donor. It includes dual issue, BTIC and later FPU work. This is a
-  comparison pin, not an accepted replacement or proven Q605 resource win.
+  our donor. It includes dual issue, BTIC and later FPU work. This is an
+  imported candidate, not an accepted replacement or proven resource win.
 - Source: <https://github.com/alanswx/MacQuadra800_MiSTer/tree/pipelined-040-small33>.
 - Live MiSTer-devel branch tips checked 2026-11-01: small33 remains
   `82122463f51cc22d61164aa343178188cb225953`; DDR3-VRAM is
@@ -38,15 +38,14 @@ Expect a future donor replacement, rather than tracking every optimization.
 
 ## Next checkpoints
 
-- [ ] Review ongoing integration work for new CPU-specific assumptions;
+- [x] Review ongoing integration work for new CPU-specific assumptions;
   preserve the ability to replace the donor without rewriting machine logic.
-- [ ] Import the pinned small33 CPU as an isolated candidate; review supplied
-  size settings and known limits during adaptation, then qualify at 25 MHz.
-- [ ] Reconcile donor changes with local no-FPU decoding, format-4/RTE,
+- [x] Import the pinned small33 CPU as an isolated candidate; review supplied
+  size settings and known limits during adaptation.
+- [x] Reconcile donor changes with local no-FPU decoding, format-4/RTE,
   exception/store fixes, generated microcode and DMU adaptation.
-- [ ] Prepare an isolated experiment. Compare the supplied configuration
-  with `DUAL=0`, `BTIC=0` for headroom; preserve 4 KiB caches, machine
-  interfaces, 25/75 MHz clocks, scaler startup guard and stock sys.
+- [x] Prepare an isolated experiment with `DUAL=0`, `BTIC=0`; preserve 4 KiB
+  caches, machine interfaces, 25/75 MHz clocks, scaler startup guard and sys.
 - [ ] Pass existing CPU, LC040, bus, machine and MMU checks; verify no FPU
   is elaborated. Elle runs longer execution builds and full Quartus fits.
 - [ ] Compare matched features/seed/source: occupied LABs, ALMs, M10Ks,
@@ -54,3 +53,18 @@ Expect a future donor replacement, rather than tracking every optimization.
 
 Until then, retain the current LC040 implementation as
 the reference. Use a branch for the import; keep one MacLC475 project.
+
+## Handoff
+
+Directed bus (489), LC040 decode/trap (1393) and frame microcode (8) checks
+pass. CPU, LC040, machine and MMU Verilator elaboration passes; no FPU is
+elaborated. Quartus 17.0.2 Analysis & Elaboration: 0 errors, 195 warnings.
+ModelSim 10.5b cannot compile the full donor; use Verilator for execution.
+
+Elle runs `wsl.exe --exec sh tests/run_cpu040.sh MODE` for each of `smoke`,
+`lc040`, `machine` and `mmu`, then one full `MacLC475` fit if all pass.
+Compare the reference and candidate with the same seed (38) and features.
+The donor defaults enable DUAL and BTIC; those remain a separate comparison,
+not the initial fitting target. No CPU execution or hardware acceptance is
+claimed for this import. Existing LC040 register-file probes remain confined
+to the CPU-specific test; machine logic and bus adapter are unchanged.
