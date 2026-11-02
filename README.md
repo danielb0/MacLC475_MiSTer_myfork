@@ -26,6 +26,9 @@ Short checks: `scripts/check_imports.ps1` and `tests/run_cpu040.ps1`.
 CPU execution: `wsl.exe --exec sh tests/run_cpu040.sh lc040` (also smoke,
 machine and mmu). Elle runs longer checks and full Quartus builds.
 
-The machine boots; floppy write corruption remains unresolved. Use disposable
-floppy copies. OEM installation and persisted writes remain acceptance gates.
-See `docs/CURRENT_DIRECTION.md` and `docs/CPU_DONOR.md` for the next work.
+Mac OS 7.5 CD-ROM installation to SCSI HDD (7.5.3), the 7.5.5 SuperDrive
+update with three floppy swaps, repeated reboots and memory configuration
+changes are confirmed. Floppy write corruption remains unresolved; use
+disposable floppy copies. V-Integer is reported not working; cause unknown.
+Performance and broader compatibility remain unqualified. See
+`docs/CURRENT_DIRECTION.md` and `docs/CPU_DONOR.md` for status and next work.

@@ -1,14 +1,14 @@
 # CPU donor tracker
 
-Status: small33 imported on `codex/small33-lc040`; qualification pending.
-Updated: 2026-11-01.
+Status: small33 fits and runs Mac OS 7.5.5 on `codex/small33-lc040`;
+qualification pending.
+Updated: 2026-11-02.
 
 ## Intent
 
 Find a stable LC040 donor target with maximum practical resource headroom
-at 25 MHz. The computer mostly works, but CPU integration remains bring-up
-work. Our imported revision is behind upstream, and the optimal Q605
-configuration has not been established.
+at 25 MHz. Installation and reboot work; CPU correctness, compatibility and
+the optimal Q605 configuration remain under qualification.
 
 Q605 owns machine integration and qualification. CPU optimization belongs
 to the upstream team. Preserve the working CPU while qualifying a replacement.
@@ -48,6 +48,8 @@ Expect a future donor replacement, rather than tracking every optimization.
   caches, machine interfaces, 25/75 MHz clocks, scaler startup guard and sys.
 - [ ] Pass existing CPU, LC040, bus, machine and MMU checks; verify no FPU
   is elaborated. Elle runs longer execution builds and full Quartus fits.
+- [x] Complete a full Quartus fit and guest installation through Mac OS 7.5.5,
+  including update floppy swaps, repeated reboots and memory changes.
 - [ ] Compare matched features/seed/source: occupied LABs, ALMs, M10Ks,
   registers and timing. Confirm guest behavior before accepting a donor.
 
@@ -61,10 +63,19 @@ pass. CPU, LC040, machine and MMU Verilator elaboration passes; no FPU is
 elaborated. Quartus 17.0.2 Analysis & Elaboration: 0 errors, 195 warnings.
 ModelSim 10.5b cannot compile the full donor; use Verilator for execution.
 
-Elle runs `wsl.exe --exec sh tests/run_cpu040.sh MODE` for each of `smoke`,
-`lc040`, `machine` and `mmu`, then one full `MacLC475` fit if all pass.
+CPU execution results remain unrecorded. Elle runs
+`wsl.exe --exec sh tests/run_cpu040.sh MODE` for each of `smoke`, `lc040`,
+`machine` and `mmu`.
 Compare the reference and candidate with the same seed (38) and features.
 The donor defaults enable DUAL and BTIC; those remain a separate comparison,
-not the initial fitting target. No CPU execution or hardware acceptance is
-claimed for this import. Existing LC040 register-file probes remain confined
-to the CPU-specific test; machine logic and bus adapter are unchanged.
+not the initial fitting target. The local 2026-11-01 fit uses 31,370 ALMs
+(75%) and 505 RAM blocks (91%); the timing summary has positive slack for
+all listed checks. No matched resource win or final donor acceptance is claimed.
+
+Elle confirmed CD-ROM installation to SCSI ID 0 HDD (7.5.3), the 7.5.5
+SuperDrive update with three floppy swaps, repeated reboots and memory
+configuration changes. V-Integer did not work; version, exact symptom and
+cause remain unrecorded. Performance is untested. Floppy write corruption
+remains open; successful installation does not close that acceptance gate.
+Existing LC040 register-file probes remain confined to the CPU-specific test;
+machine logic and bus adapter are unchanged.
