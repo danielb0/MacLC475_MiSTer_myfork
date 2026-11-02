@@ -1,5 +1,20 @@
 # SWIM II write trace
 
+Known failure: System 7.5.3 Revision 2 Install 01 booted, then became
+unbootable (Happy Mac, reset) during folder creation/eject/remount testing.
+The exact failing step and deployed RBF/Main hashes were not recorded.
+Both images were already supplied and compared; do not request them again.
+
+- Clean: `D:/MiSTer/Macintosh/Mac OS/Apple SSW and Mac OS/7/Apple Mac OS 7.5.3 Revision 2 (3.5-1.44mb)/Install 01.img`
+  SHA-256: `c290f3d285f7da06561e43ec09861b678d2fc717d8bf73a73ccc650be1636aa4`.
+- Damaged: `C:/Workspace/Git/MacQuadra605_MiSTer/local/Install 01-bad.img`
+  SHA-256: `ee4710ec5608e2e65a575fc181bc0cd5ebf694937eb8fca752bdbac720d534e8`.
+
+Only LBAs 2, 26 and 28 differ (250 bytes). The damaged catalog references
+leaf node 4 at LBA 30, which remains zero. This proves an incomplete catalog
+update, not where or when the write was lost. The remaining evidence is a
+hardware trace through decode, RAM commit and host save on disposable media.
+
 On a diagnostic branch, add `SWIM2_TRACE=1` and `rtl/swim2_trace.sv` to
 the existing `MacLC475.qsf` assignments. Build `MacLC475.qpf`; output stays
 in `output_files/`. Do not add another project.

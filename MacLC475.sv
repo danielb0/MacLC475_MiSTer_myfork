@@ -55,65 +55,56 @@ wire [1:0] ar;
 
 `include "build_id.v"
 localparam CONF_STR = {
-	// UART token: 57600/115200 for MidiLink + PPP, plus MIDI (31250).  The SCC
-	// reaches 31250 through its own WR11/TRxC path (rtl/scc.v); the token is
-	// what makes the Main offer the MIDI mode, and the mode it reports back in
-	// uart_mode is what gates the user-port MIDI-in merge on serialIn below.
+	// UART modes for PPP, MidiLink and the SCC's MIDI clock path.
 	"MacLC475;UART57600:115200,MIDI;",
-	// SC0, not S0: the letter after S is a flag, and 'C' is what sets
-	// store_name in the Main's option parser -- i.e. what makes MiSTer write
-	// config/MacLC475.s0 and re-mount the image on the next core start. With a
-	// plain S0 the mount works but is forgotten every boot, so the disk had to
-	// be picked from the OSD by hand each time and the deploy's slot-0 seed was
-	// inert. Every sibling Mac core (MacLC, MacLCII, MacIIvi, MacPlus,
-	// LBMacTwo) uses SC0 for this reason.
-	"SC0,HDAVHD,Mount SCSI disk 0;",
-	"SC1,HDAVHD,Mount SCSI disk 1;",
-	// slot 2 is the 512-byte PRAM image (CUDA PRAM): loaded
-	// before the machine leaves reset, saved back when the guest changes it
-	"SC2,NVR,Mount PRAM;",
-	// slot 4 is the CD-ROM (SCSI ID 3).  CUE/BIN/CHD need the Main fork's
-	// Mac CD layer (support/mac/mac_cdrom.cpp), which serves them as a flat
-	// 2048-byte-sector disc plus a TOC blob; ISO/TOAST work on a stock Main.
-	"SC4,ISOTO*CUEBINCHD,Mount CD-ROM;",
+	"-;",
+	// SC remembers mounts; S leaves the floppy unmounted at the next start.
+	// CUE/BIN/CHD require Main's Mac CD layer.
+	"SC0,HDAVHD,Pri. disk (ID 0);",
+	"SC1,HDAVHD,Disk (ID 1);",
+	"SC4,ISOTO*CUEBINCHD,CD-ROM (ID 3);",
 `ifdef SWIM2
-	"S6,DSKIMGIMA,Mount internal floppy;",
-	"D0T[16],Retry floppy I/O;",
+	"S6,DSKIMGIMA,Floppy disk;",
 `endif
 	"-;",
-	"O[11:9],RAM (on reset),4MB,5MB,6MB,8MB,12MB,20MB,36MB;",
-	// The monitor on the DA-15.  The ROM samples the DAFB sense lines once
-	// at boot and QuickDraw lays out for that geometry, so this is latched
-	// under reset like the RAM size (MacLC does the same).
-`ifndef VIDEO_512_OFF
-	"O[5],Monitor (on reset),13in 640x480,12in 512x384;",
-`endif
-	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"O[13:12],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
-	"O[14],Video diagnostics,Off,On;",
-	"O[15],ADB diagnostics,Off,On;",
-	// Built-in Ethernet (rtl/sonic_mbx.sv + the Main fork's support/mac).  Off by
-	// default: the machine is then bit for bit the one without it.  The core reads
-	// only [6]; the interface choice is the Main's.  The guest's MAC is 08:00:07 +
-	// the last three octets of the MiSTer's own, so there is nothing else to set.
-`ifndef ETHERNET_OFF
-	"-;",
-	"O[6],Ethernet (on reset),Off,On;",
-	"O[8:7],Net interface,eth0,eth1,wlan0,tap0;",
-	"-;",
-`endif
-	"-;",
-	"T[0],Reset;",
-	"R[0],Reset and close OSD;",
+	"P1,Machine;",
+	"P2,Video;",
 `ifndef MT32PI_OFF
+	"P4,Audio;",
+`endif
+	"P5,Advanced;",
 	"-;",
-	"P1,MT32-pi;",
-	"P1-;",
-	"P1O[35],Use MT32-pi,Yes,No;",
-	"P1O[36],Synth,Munt,FluidSynth;",
-	"P1O[38:37],Munt ROM,MT-32 v1,MT-32 v2,CM-32L;",
-	"P1O[41:39],SoundFont,0,1,2,3,4,5,6,7;",
-	"P1O[43:42],Show Info,No,Yes,LCD-On,LCD-Auto;",
+	"h1-,Changes pending;",
+	"R[0],Apply and reset;",
+
+	"P1O[11:9],Memory,4MB,5MB,6MB,8MB,12MB,20MB,36MB;",
+`ifndef ETHERNET_OFF
+	"P1O[6],Ethernet,Off,On;",
+	"P1O[8:7],Net interface,eth0,eth1,wlan0,tap0;",
+`endif
+
+`ifndef VIDEO_512_OFF
+	"P2O[5],Monitor,13in 640x480,12in 512x384;",
+`endif
+	"P2O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"P2O[13:12],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
+
+`ifndef MT32PI_OFF
+	"P4O[35],Use MT32-pi,Yes,No;",
+	"P4O[36],Synth,Munt,FluidSynth;",
+	"P4O[38:37],Munt ROM,MT-32 v1,MT-32 v2,CM-32L;",
+	"P4O[41:39],SoundFont,0,1,2,3,4,5,6,7;",
+	"P4O[43:42],Show Info,No,Yes,LCD-On,LCD-Auto;",
+`endif
+
+	"P5SC2,NVR,PRAM image;",
+	"P5O[14],Video diagnostics,Off,On;",
+	"P5O[15],ADB diagnostics,Off,On;",
+`ifdef SWIM2
+	"D0P5T[16],Retry floppy I/O;",
+`endif
+
+`ifndef MT32PI_OFF
 	// "Show Info = Yes" popup strings, indexed 1-based by mt32_info_disp
 	"I,",
 	"MT32-pi: SoundFont #0,",
@@ -149,6 +140,7 @@ localparam CONF_STR = {
 
 wire  [1:0] buttons;
 wire [127:0] status;
+wire settings_pending;
 wire video_diagnostic = status[14] | status[15];
 wire video_diagnostic_v;
 wire [1:0] scale_v, mt32_info_v;
@@ -245,10 +237,10 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(VDNUM), .BLKSZ(2)) hps_io
 `ifdef SWIM2
 	.EXT_BUS(floppy_ext_bus),
 	.sdram_sz(sdram_sz),
-	.status_menumask({15'd0, !floppy_fault}),
+	.status_menumask({14'd0, settings_pending, !floppy_fault}),
 `else
 	.EXT_BUS(),
-	.status_menumask(16'd0),
+	.status_menumask({14'd0, settings_pending, 1'b0}),
 `endif
 	.gamma_bus(),
 
@@ -609,6 +601,17 @@ wire  [2:0] dbg_sw  = 3'd0;
 always @(posedge clk_sys) if (reset) begin
 	eth_ena <= (SONIC_EN != 0) && status[6];
 end
+
+// Only settings latched under reset need the pending indicator.
+assign settings_pending = (ram_cfg != ram_cfg_osd)
+`ifndef VIDEO_512_OFF
+	|| (mon_12in != status[5])
+`endif
+`ifndef ETHERNET_OFF
+	|| (eth_ena != status[6])
+`endif
+	;
+
 wire [11:0] eth_mem_addr;
 wire        eth_mem_rd, eth_mem_we;
 wire [63:0] eth_mem_wdata;
