@@ -22,9 +22,10 @@ Updated 2026-11-01.
   catalog regressions do not reproduce the corruption. Capture the failing
   guest sequence on disposable copies before guessing at RTL fixes. The
   supplied clean/damaged images and failure details are in `SWIM2_TRACE.md`.
-- OSD follows Dani's MacPPC7300 grouping: disks/floppy at root, Machine and
-  Video pages, optional Audio, PRAM/diagnostics/retry under Advanced. Existing
-  mount slots and status bits remain; reset-latched settings show pending.
+- OSD follows Dani's computer-core layout: media/Load ROM and Memory at root,
+  fixed page numbers, empty pages omitted, PRAM/retry under Advanced. Existing
+  mount slots and status bits remain; memory and video changes show pending
+  until reset. Diagnostics require `MACLC475_DEBUG` and live on P9.
 - Own routine decisions and batch coherent implementation. "Continue" is
   sufficient direction. Research/tests must unblock a concrete milestone.
   Ask for missing resources, consequential ambiguity or hardware observations.

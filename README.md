@@ -12,6 +12,11 @@ On MiSTer, put the native FF7439EE ROM at `games/MacLC475/boot0.rom`.
 Copy existing games/config data from MacQuadra605 and reselect saved mounts
 when their paths change. Preserve original disk and PRAM files.
 
+The OSD follows [Dani's computer-core layout](https://github.com/danifunker/hp9000-715_MiSTer/blob/master/docs/osd-standard.md).
+Media, Load ROM and Memory are at root; Video is P2 and Advanced is P5.
+Memory and video changes wait for Apply and reset. PRAM and floppy retry
+are under Advanced. `MACLC475_DEBUG` adds diagnostics on P9.
+
 Main needs both patches in `patches/` for MacLC475 SCSI and floppy services.
 `scripts/build_main_q605.sh` builds a patched checkout at `local/Main_MiSTer`;
 that host checkout/toolchain is not part of this FPGA source import.

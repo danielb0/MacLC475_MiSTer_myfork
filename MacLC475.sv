@@ -66,21 +66,30 @@ localparam CONF_STR = {
 `ifdef SWIM2
 	"S6,DSKIMGIMA,Floppy disk;",
 `endif
+	"F0,ROM,Load ROM;",
 	"-;",
+	"O[11:9],Memory,4MB,5MB,6MB,8MB,12MB,20MB,36MB;",
+`ifndef ETHERNET_OFF
+	"O[8:7],Network interface,eth0,eth1,wlan0,tap0;",
+`endif
+	"-;",
+`ifndef ETHERNET_OFF
 	"P1,Machine;",
+`endif
 	"P2,Video;",
 `ifndef MT32PI_OFF
 	"P4,Audio;",
 `endif
 	"P5,Advanced;",
+`ifdef MACLC475_DEBUG
+	"P9,Debug;",
+`endif
 	"-;",
 	"h1-,Changes pending;",
 	"R[0],Apply and reset;",
 
-	"P1O[11:9],Memory,4MB,5MB,6MB,8MB,12MB,20MB,36MB;",
 `ifndef ETHERNET_OFF
 	"P1O[6],Ethernet,Off,On;",
-	"P1O[8:7],Net interface,eth0,eth1,wlan0,tap0;",
 `endif
 
 `ifndef VIDEO_512_OFF
@@ -98,10 +107,12 @@ localparam CONF_STR = {
 `endif
 
 	"P5SC2,NVR,PRAM image;",
-	"P5O[14],Video diagnostics,Off,On;",
-	"P5O[15],ADB diagnostics,Off,On;",
 `ifdef SWIM2
 	"D0P5T[16],Retry floppy I/O;",
+`endif
+`ifdef MACLC475_DEBUG
+	"P9O[14],Video diagnostics,Off,On;",
+	"P9O[15],ADB diagnostics,Off,On;",
 `endif
 
 `ifndef MT32PI_OFF
@@ -141,7 +152,18 @@ localparam CONF_STR = {
 wire  [1:0] buttons;
 wire [127:0] status;
 wire settings_pending;
+reg [1:0] aspect_cfg = 2'd0, scale_cfg = 2'd0;
+always @(posedge clk_sys) if (reset) begin
+	aspect_cfg <= status[122:121];
+	scale_cfg <= status[13:12];
+end
+`ifdef MACLC475_DEBUG
 wire video_diagnostic = status[14] | status[15];
+wire adb_diagnostic = status[15];
+`else
+wire video_diagnostic = 1'b0;
+wire adb_diagnostic = 1'b0;
+`endif
 wire video_diagnostic_v;
 wire [1:0] scale_v, mt32_info_v;
 `ifdef MT32PI_OFF
@@ -153,7 +175,7 @@ wire [1:0] mt32_info_control = status[43:42];
 `endif
 video_control video_control (
 	.clk_sys(clk_sys), .clk_vid(clk_vid),
-	.control({status[122:121], status[13:12], mt32_info_control, video_diagnostic}),
+	.control({aspect_cfg, scale_cfg, mt32_info_control, video_diagnostic}),
 	.control_v({ar, scale_v, mt32_info_v, video_diagnostic_v})
 );
 wire [10:0] ps2_key;
@@ -604,6 +626,7 @@ end
 
 // Only settings latched under reset need the pending indicator.
 assign settings_pending = (ram_cfg != ram_cfg_osd)
+	|| (aspect_cfg != status[122:121]) || (scale_cfg != status[13:12])
 `ifndef VIDEO_512_OFF
 	|| (mon_12in != status[5])
 `endif
@@ -710,7 +733,7 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.debug_status2(m_debug_status2),
 	.debug_fault(),
 	.debug_halted(m_debug_halted),
-	.video_diagnostic(video_diagnostic), .adb_diagnostic(status[15]),
+	.video_diagnostic(video_diagnostic), .adb_diagnostic(adb_diagnostic),
 	.video_platform_status({8'h60, rom_loaded, pll_locked, pll_video_locked, pix_quiet,
 	                       pram_ready, cuda_storage_ready, cuda_reset_n, reset}),
 
