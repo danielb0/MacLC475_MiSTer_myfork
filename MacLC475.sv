@@ -152,11 +152,6 @@ localparam CONF_STR = {
 wire  [1:0] buttons;
 wire [127:0] status;
 wire settings_pending;
-reg [1:0] aspect_cfg = 2'd0, scale_cfg = 2'd0;
-always @(posedge clk_sys) if (reset) begin
-	aspect_cfg <= status[122:121];
-	scale_cfg <= status[13:12];
-end
 `ifdef MACLC475_DEBUG
 wire video_diagnostic = status[14] | status[15];
 wire adb_diagnostic = status[15];
@@ -175,7 +170,7 @@ wire [1:0] mt32_info_control = status[43:42];
 `endif
 video_control video_control (
 	.clk_sys(clk_sys), .clk_vid(clk_vid),
-	.control({aspect_cfg, scale_cfg, mt32_info_control, video_diagnostic}),
+	.control({status[122:121], status[13:12], mt32_info_control, video_diagnostic}),
 	.control_v({ar, scale_v, mt32_info_v, video_diagnostic_v})
 );
 wire [10:0] ps2_key;
@@ -626,7 +621,6 @@ end
 
 // Only settings latched under reset need the pending indicator.
 assign settings_pending = (ram_cfg != ram_cfg_osd)
-	|| (aspect_cfg != status[122:121]) || (scale_cfg != status[13:12])
 `ifndef VIDEO_512_OFF
 	|| (mon_12in != status[5])
 `endif

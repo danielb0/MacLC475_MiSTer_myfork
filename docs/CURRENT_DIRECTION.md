@@ -9,14 +9,16 @@ Updated 2026-11-02.
   4 KiB caches, no FPU, Ethernet/MT32-pi off and scaler startup guard retained.
   Old CPU, alternate projects, reports, binaries and investigation archives
   remain in the original repository. This is the reference on `main`.
-- Keep the accepted compacted BRAM VRAM. Faithful VRAM is a separate project.
-  Do not change clocks or memory architecture during the CPU refresh.
-- Candidate on `codex/small33-lc040`: pinned small33 CPU imported with local
-  LC040 decoding, format-4/RTE and scalar DMU adaptation. DUAL=0, BTIC=0;
-  no FPU, 4 KiB caches and machine bus contracts retained. See `CPU_DONOR.md`.
-  Full fit and installation now succeed; CPU execution results, compatibility
-  and matched resource comparison still need qualification before acceptance.
-  Do not begin an independent CPU optimization campaign.
+- Keep the accepted compacted BRAM VRAM (320 KB physical, 512 KB advertised).
+  Full 512 KB VRAM is a later option via the Q800 DDR3-VRAM branch
+  (`6f72684`); keep VRAM behind the memsel beat port and DAFB fetch port so
+  a DDR3 backend can replace the BRAM block without machine changes.
+  DDR3 already serves ROM fills; scanout would need a prefetch buffer.
+- CPU refresh complete on `codex/small33-lc040`: latest Q800 small33 CPU with
+  local LC040 decoding, format-4/RTE and scalar DMU adaptation. DUAL=0,
+  BTIC=0; no FPU, 4 KiB caches and machine bus contracts retained. See
+  `CPU_DONOR.md`. CPU execution results remain unrecorded.
+- Performance is the next major concern; establish a measured baseline first.
 - Elle confirmed Mac OS 7.5 CD-ROM installation to SCSI ID 0 HDD (7.5.3),
   then the 7.5.5 SuperDrive update with three floppy swaps. Repeated reboots
   and memory configuration changes work; the HDD installation persists.
@@ -25,14 +27,14 @@ Updated 2026-11-02.
   catalog regressions do not reproduce the corruption. Capture the failing
   guest sequence on disposable copies before guessing at RTL fixes. The
   supplied clean/damaged images and failure details are in `SWIM2_TRACE.md`.
-- V-Integer did not work in guest testing; version, exact symptom and cause
-  are not yet recorded. Performance remains untested. Remaining qualification
-  includes MEMCjr/PrimeTime timing, SWIM II register behavior, audio,
+- Performance remains untested. Remaining qualification includes
+  MEMCjr/PrimeTime timing, SWIM II register behavior, audio,
   serial/MIDI, PRAM persistence and supported display/depth combinations.
 - OSD follows Dani's computer-core layout: media/Load ROM and Memory at root,
   fixed page numbers, empty pages omitted, PRAM/retry under Advanced. Existing
-  mount slots and status bits remain; memory and video changes show pending
-  until reset. Diagnostics require `MACLC475_DEBUG` and live on P9.
+  mount slots and status bits remain; memory and monitor changes show pending
+  until reset. Aspect ratio and Scale apply live. Diagnostics require
+  `MACLC475_DEBUG` and live on P9.
 - Own routine decisions and batch coherent implementation. "Continue" is
   sufficient direction. Research/tests must unblock a concrete milestone.
   Ask for missing resources, consequential ambiguity or hardware observations.
