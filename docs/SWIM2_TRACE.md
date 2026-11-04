@@ -20,7 +20,8 @@ the existing `MacLC475.qsf` assignments. Build `MacLC475.qpf`; output stays
 in `output_files/`. Do not add another project.
 This diagnostic project replaces the HPS modem UART output with a passive trace.
 Normal projects retain guest serial output and omit the tracer. Stock sys is unchanged.
-Check the diagnostic fit/timing before loading it; no fitted result is established.
+Fitted 2026-11-04 (`9ed2fd9`): 31,607 ALMs, 510 RAM blocks (92%); positive
+slack, minimum hold 0.117 ns. Recheck fit/timing after any trace rebuild.
 
 Prepare disposable media and verified RBF/Main copies on the host:
 
