@@ -32,3 +32,5 @@ changes are confirmed. Floppy write corruption remains unresolved; use
 disposable floppy copies. V-Integer is reported not working; cause unknown.
 Performance and broader compatibility remain unqualified. See
 `docs/CURRENT_DIRECTION.md` and `docs/CPU_DONOR.md` for status and next work.
+See [release readiness](docs/RELEASE_READINESS.md) for the status assessment
+and release-candidate checklist.

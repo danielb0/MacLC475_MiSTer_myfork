@@ -93,7 +93,7 @@ localparam CONF_STR = {
 `endif
 
 `ifndef VIDEO_512_OFF
-	"P2O[5],Monitor,13in 640x480,12in 512x384;",
+	"P2O[5],Monitor,13-inch 640x480,12-inch 512x384;",
 `endif
 	"P2O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P2O[13:12],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
