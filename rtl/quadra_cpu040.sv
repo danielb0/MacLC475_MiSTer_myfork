@@ -2,7 +2,14 @@
 
 module quadra_cpu040
 #(
-	parameter AP040_HAS_FPU = 0
+	parameter AP040_HAS_FPU = 0,
+	// Lean Q800 donor: a two-entry posted-write queue below the caches for
+	// RAM and VRAM-window stores (wombat_store_buffer). 0 restores direct writes.
+`ifdef AP040_STORE_BUFFER_OFF
+	parameter AP040_STORE_BUFFER = 0
+`else
+	parameter AP040_STORE_BUFFER = 1
+`endif
 )
 (
 	input         clk,
@@ -63,6 +70,12 @@ wire        dbg_halted;
 wire        dbg_retire;
 wire [31:0] c_di;
 wire        c_ta_n, c_tea_n, c_tci_n, c_avec_n;
+wire        c_lock_n;
+// the adapter's side of the optional store buffer
+wire        cpu_bus_req, cpu_bus_write, cpu_bus_instr, cpu_bus_ack;
+wire  [1:0] cpu_bus_size;
+wire [31:0] cpu_bus_addr, cpu_bus_wdata, cpu_bus_rdata;
+wire  [2:0] cpu_bus_fc;
 
 ap68040 #(
 	.HAS_FPU(AP040_HAS_FPU), .FPU_REVISION(8'h41),
@@ -81,7 +94,7 @@ ap68040 #(
 
 	.a_o(c_a), .a_oe(c_a_oe), .d_o(c_do), .d_oe(),
 	.rw_n(c_rw_n), .siz(c_siz), .tt(c_tt), .tm(c_tm), .tln(), .upa(),
-	.ciout_n(), .lock_n(), .locke_n(), .ts_n(c_ts_n), .tip_n(),
+	.ciout_n(), .lock_n(c_lock_n), .locke_n(), .ts_n(c_ts_n), .tip_n(),
 	.d_i(c_di), .ta_n(c_ta_n), .tea_n(c_tea_n), .tci_n(c_tci_n), .tbi_n(1'b1),
 	.ipl_n(ipl), .avec_n(c_avec_n), .ipend_n(),
 	// the only master: the bus is granted for good
@@ -99,11 +112,41 @@ quadra_bus040 bus_adapter (
     .c_ts_n(c_ts_n), .c_siz(c_siz), .c_tt(c_tt), .c_tm(c_tm),
     .c_di(c_di), .c_ta_n(c_ta_n), .c_tea_n(c_tea_n),
     .c_tci_n(c_tci_n), .c_avec_n(c_avec_n),
-    .bus_req(bus_req), .bus_write(bus_write), .bus_instr(bus_instr),
-    .bus_size(bus_size), .bus_addr(bus_addr), .bus_wdata(bus_wdata),
-    .bus_fc(bus_fc), .bus_ack(bus_ack), .bus_rdata(bus_rdata),
+    .bus_req(cpu_bus_req), .bus_write(cpu_bus_write), .bus_instr(cpu_bus_instr),
+    .bus_size(cpu_bus_size), .bus_addr(cpu_bus_addr), .bus_wdata(cpu_bus_wdata),
+    .bus_fc(cpu_bus_fc), .bus_ack(cpu_bus_ack), .bus_rdata(cpu_bus_rdata),
     .berr(berr), .dbg_stall_flt(dbg_stall_flt), .busy(debug_busy)
 );
+
+generate if (AP040_STORE_BUFFER != 0) begin : g_store_buffer
+	// Only non-faulting RAM/VRAM writes are posted. The host qualifier
+	// excludes the boot overlay; the queue checks the physical window.
+	// Locked writes go directly. Reads and non-posted writes drain older
+	// stores first (one different-line read may pass), preserving device
+	// and RMW ordering.
+	wombat_store_buffer #(.ENABLE(1)) store_buffer (
+		.clk(clk), .nreset(nreset), .ce(ce),
+		.buffer_writes(store_buffer_ok && c_lock_n),
+		.s_req(cpu_bus_req), .s_posted(1'b0), .s_write(cpu_bus_write),
+		.s_instr(cpu_bus_instr), .s_size(cpu_bus_size),
+		.s_addr(cpu_bus_addr), .s_wdata(cpu_bus_wdata), .s_fc(cpu_bus_fc),
+		.s_ack(cpu_bus_ack), .s_rdata(cpu_bus_rdata),
+		.m_req(bus_req), .m_write(bus_write), .m_instr(bus_instr),
+		.m_size(bus_size), .m_addr(bus_addr), .m_wdata(bus_wdata), .m_fc(bus_fc),
+		.m_ack(bus_ack), .m_rdata(bus_rdata), .m_err(berr),
+		.pending()
+	);
+end else begin : g_no_store_buffer
+	assign bus_req       = cpu_bus_req;
+	assign bus_write     = cpu_bus_write;
+	assign bus_instr     = cpu_bus_instr;
+	assign bus_size      = cpu_bus_size;
+	assign bus_addr      = cpu_bus_addr;
+	assign bus_wdata     = cpu_bus_wdata;
+	assign bus_fc        = cpu_bus_fc;
+	assign cpu_bus_ack   = bus_ack;
+	assign cpu_bus_rdata = bus_rdata;
+end endgenerate
 
 //----------------------------------------------------------------------------
 // the rest of wombat_cpu's ports

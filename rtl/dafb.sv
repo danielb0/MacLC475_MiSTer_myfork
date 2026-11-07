@@ -5,23 +5,24 @@
 //  Register blocks at $F9800000 (32-bit registers, low 12 bits live):
 //    +$000 DAFB:   fb base ($00 bits 20:9, $04 bits 8:5), stride ($08, in
 //          longwords), timing ctrl ($0C), config ($10), monitor sense
-//          ($1C — hardwired 13" 640x480: reads 1), test/version ($2C =
-//          version 3 << 9)
+//          ($1C — the selected monitor's code, see mon_sel), test/version
+//          ($2C = version 3 << 9)
 //    +$100 Swatch: mode ($00), int enable ($04 bit0 VBL), int status
 //          ($08), VBL clear ($14, read or write; $0C cursor), H/V CRTC
-//          params ($24-$64, stored, not interpreted — scanout is a fixed
-//          640x480 window)
+//          params ($24-$64, stored, not interpreted — the scanout frame is
+//          fixed by the monitor select, see below)
 //    +$200 RAMDAC (AC842a): palette address ($00), palette data ($10,
 //          R,G,B write cycle), pixel bus control ($20 — bits 4:2 select
 //          1/2/4/8/24 bpp)
 //    +$300 clockgen (DP8534): writes stored, reads 0; the sim scanout
 //          does not model the PLL
 //
-//  Scanout: 640x480 in an 800x525 frame, one pixel per clk, 8bpp (and
-//  1/2/4bpp) from VRAM through the CLUT.  VRAM reads go out on vid_addr
-//  and return registered on vid_rdata the next cycle.  VBL raises
-//  int_status bit 0 (when enabled) at the start of the blank; the irq
-//  output is simply |int_status (MAME recalc_ints).
+//  Scanout: a fixed frame per monitor (mon_sel: 640x480, 512x384, 832x624
+//  or 1152x870 active), one pixel per clk_vid, 1/2/4/8 bpp through the
+//  CLUT and 16/24 bpp direct, from the DDR3 scanline cache (vram_ddr3.sv)
+//  a line at a time.  VBL raises int_status bit 0 (when enabled) at the
+//  start of the blank; the irq output is simply |int_status (MAME
+//  recalc_ints).
 //============================================================================
 
 module dafb
@@ -38,13 +39,17 @@ module dafb
 	// for the same arrangement -- config 2FF-synced in, VBL toggled back.
 	input         clk_vid,
 	input         nreset_vid,
-	// Monitor on the DA-15: 0 = 13" RGB 640x480 (sense code 6), 1 = 12" RGB
-	// 512x384 (sense code 2).  Quasi-static: the platform latches it under
+	// Monitor on the DA-15.  Quasi-static: the platform latches it under
 	// reset, because a real Quadra samples the sense lines only in the ROM's
 	// boot probe and QuickDraw lays out for the boot geometry.  It picks
 	// both the sense-register answer and the scanout timing (clk_vid is
-	// retargeted to the matching dot clock by MacQuadra800.sv).
-	input         mon_12in,
+	// retargeted to the matching dot clock by MacLC475.sv; LC 475 offers
+	// only 0 and 1 so far):
+	//   0  13" RGB    640x480   sense code 6
+	//   1  12" RGB    512x384   sense code 2
+	//   2  16" RGB    832x624   extended sense 0x2D (sense 0 and 2 tied)
+	//   3  21" RGB   1152x870   sense code 0
+	input   [1:0] mon_sel,
 	input         diagnostic,
 	input  [63:0] diagnostic_status,
 	input  [31:0] diagnostic_platform,
@@ -67,6 +72,12 @@ module dafb
 	// the programmed row pitch, so the platform's VRAM mapper can compact
 	// away the never-visible tail of each row (see MacQuadra800.sv)
 	output [13:0] vid_stride,
+
+	// DDR3 Scanline DMA handshake & Ping-Pong cache interface
+	output reg  [9:0] vid_col_word,
+	output reg        vid_line_req,
+	output reg [20:0] vid_line_addr,
+	output reg        vid_line_swap,
 
 	output  [7:0] vga_r,
 	output  [7:0] vga_g,
@@ -127,12 +138,28 @@ reg  [7:0] pbctrl;
 // Antelope PCBR1 is selected through the palette address and PCBR0.
 reg  [7:0] pcbr1;
 wire pcbr1_sel = (pal_addr == 8'd1) && (pbctrl[2:1] == 2'b11);
-reg  [2:0] mode;                 // 0=1bpp 1=2bpp 2=4bpp 3=8bpp 4=24bpp
+reg  [2:0] mode;                 // 0=1bpp 1=2bpp 2=4bpp 3=8bpp 4=24bpp 5=16bpp
 
 assign vbl_irq = |(int_status & int_en);
 
 // pulsed in the clk domain one clk_vid VBL later; see the CDC below
 wire vbl_start;
+
+// Monitor sense ($1C).  A bit reads 1 for a sense line that is LOW.  A
+// standard monitor grounds a fixed pattern of the three lines (its code is
+// the lines left high: 6 = 13" grounds sense 0 only), so the register reads
+// ~code plus whatever the DAFB itself holds low.  An extended-sense monitor
+// leaves all three open (code 7) and ties two of them through diodes, so a
+// line the ROM drives low pulls its partner low as well; the ROM drives each
+// line in turn and reads the other two (Apple TN HW30, and QEMU's
+// macfb_sense_read is the same model).  The 16" RGB ties sense 0 to sense 2,
+// which reads as Apple's extended code 0x2D (10 11 01).
+wire [2:0] sense_low  = ~sense_drive;                     // lines driven low
+wire [2:0] sense_code = (mon_sel == 2'd1) ? 3'd2 :
+                        (mon_sel == 2'd2) ? 3'd7 :
+                        (mon_sel == 2'd3) ? 3'd0 : 3'd6;
+wire [2:0] sense_tied = ((mon_sel == 2'd2) && (sense_low[0] | sense_low[2])) ? 3'b101 : 3'b000;
+wire [2:0] sense_rd   = ~sense_code | sense_low | sense_tied;
 
 always @(posedge clk) begin
 	if (!nreset) begin
@@ -193,10 +220,7 @@ always @(posedge clk) begin
 					6'h02: rdata <= {20'd0, stride[13:2]};
 					6'h03: rdata <= {20'd0, timing_ctrl};
 					6'h04: rdata <= {20'd0, config_r};
-					// QEMU macfb normal-sense formula (~code & 7) | (~driven & 7):
-					// 13" 640x480 is code 6 (~6 = 001), 12" 512x384 is code 2
-					// (~2 = 101) -- MAME dafb.cpp's table, Apple TN HW26.
-					6'h07: rdata <= {29'd0, (mon_12in ? 3'b101 : 3'b001) | ~sense_drive};
+					6'h07: rdata <= {29'd0, sense_rd};
 					6'h0B: rdata <= {20'd0, 3'd3, test_r[8:0]};  // DAFB version 3
 					default: ;
 					endcase
@@ -255,6 +279,11 @@ always @(posedge clk) begin
 						if (pcbr1_sel) pcbr1 <= {wdata[7:4], 4'h2};
 						else begin
 						pbctrl <= wdata[7:0];
+						// 16 bpp: the lean Q800 donor's AC842a rule (PCBR1 bits 7:6
+						// set, then PCBR0 bits 2:1). Unverified on Antelope.
+						if ((pcbr1[7:6] == 2'b11) && (wdata[2:1] == 2'b11))
+							mode <= 3'd5;                    // 16 bpp DirectColor x555
+						else
 						case (wdata[4:2])
 						3'b000: mode <= 3'd0;             // 1bpp
 						3'b010: mode <= 3'd1;             // 2bpp
@@ -298,34 +327,43 @@ end
 reg [20:0] fb_base_meta, fb_base_v;
 reg [13:0] stride_meta,  stride_v;
 reg  [2:0] mode_meta,    mode_v;
-reg        mon_meta,     mon_v;
+reg  [1:0] mon_meta,     mon_v;
 always @(posedge clk_vid) begin
 	fb_base_meta <= fb_base; fb_base_v <= fb_base_meta;
 	stride_meta  <= stride;  stride_v  <= stride_meta;
 	mode_meta    <= mode;    mode_v    <= mode_meta;
-	mon_meta     <= mon_12in; mon_v    <= mon_meta;
+	mon_meta     <= mon_sel; mon_v     <= mon_meta;
 end
 
 //----------------------------------------------------------------------------
-// scanout: one pixel per clk_vid.
-//   13" RGB: 640x480 active in 800x525 at 25.175 MHz -> 59.94 Hz (VGA)
-//   12" RGB: 512x384 active in 640x407 at 15.664 MHz -> 60.14 Hz (the real
-//            Quadra drives 15.6672 MHz; sync 528-576 / 385-388 as MacLC's
-//            12" table, which is MAME's 512-active shape)
-// The platform swaps the dot clock with the monitor, so the counters simply
-// follow mon_v; a change holds the scanout in reset anyway (pix_quiet).
+// scanout: one pixel per clk_vid.  The platform swaps the dot clock with the
+// monitor (rtl/pll_video.v), so the counters simply follow mon_v; a change
+// holds the scanout in reset anyway (pix_quiet).  Every frame is shaped for
+// ~60 Hz, which is what the HDMI scaler and Main's vsync_adjust want, rather
+// than for the real monitors' 66.7 / 74.6 / 75 Hz (the 13" was already VGA
+// timing for that reason):
+//   13" RGB   640x480 in  800x525 at 25.175 MHz -> 59.94 Hz (VGA)
+//   12" RGB   512x384 in  640x407 at 15.664 MHz -> 60.14 Hz (real 15.6672
+//             MHz; sync 528-576 / 385-388 as MacLC's 12" table, MAME's
+//             512-active shape)
+//   16" RGB   832x624 in 1152x784 at 54.223 MHz -> 60.04 Hz (real: 1152x667
+//             at 57.2832 MHz, 74.55 Hz)
+//   21" RGB  1152x870 in 1296x906 at 70.490 MHz -> 60.03 Hz (real: 1456x915
+//             at 100 MHz, 75.06 Hz)
+// The sync pulse sits H_FP after the active area and lasts H_SYNC (same
+// vertically); the scaler only needs it inside the blank.
 //----------------------------------------------------------------------------
-wire [9:0] H_ACT  = mon_v ? 10'd512 : 10'd640;
-wire [9:0] H_FP   = 10'd16;
-wire [9:0] H_SYNC = mon_v ? 10'd48  : 10'd96;
-wire [9:0] H_TOT  = mon_v ? 10'd640 : 10'd800;
-wire [9:0] V_ACT  = mon_v ? 10'd384 : 10'd480;
-wire [9:0] V_FP   = mon_v ? 10'd1   : 10'd10;
-wire [9:0] V_SYNC = mon_v ? 10'd3   : 10'd2;
-wire [9:0] V_TOT  = mon_v ? 10'd407 : 10'd525;
+wire [10:0] H_ACT  = (mon_v == 2'd1) ? 11'd512 : (mon_v == 2'd2) ? 11'd832  : (mon_v == 2'd3) ? 11'd1152 : 11'd640;
+wire [10:0] H_FP   = (mon_v == 2'd1) ? 11'd16  : (mon_v == 2'd2) ? 11'd32   : (mon_v == 2'd3) ? 11'd32   : 11'd16;
+wire [10:0] H_SYNC = (mon_v == 2'd1) ? 11'd48  : (mon_v == 2'd2) ? 11'd64   : (mon_v == 2'd3) ? 11'd96   : 11'd96;
+wire [10:0] H_TOT  = (mon_v == 2'd1) ? 11'd640 : (mon_v == 2'd2) ? 11'd1152 : (mon_v == 2'd3) ? 11'd1296 : 11'd800;
+wire [10:0] V_ACT  = (mon_v == 2'd1) ? 11'd384 : (mon_v == 2'd2) ? 11'd624  : (mon_v == 2'd3) ? 11'd870  : 11'd480;
+wire [10:0] V_FP   = (mon_v == 2'd1) ? 11'd1   : (mon_v == 2'd2) ? 11'd3    : (mon_v == 2'd3) ? 11'd3    : 11'd10;
+wire [10:0] V_SYNC = (mon_v == 2'd1) ? 11'd3   : (mon_v == 2'd2) ? 11'd3    : (mon_v == 2'd3) ? 11'd3    : 11'd2;
+wire [10:0] V_TOT  = (mon_v == 2'd1) ? 11'd407 : (mon_v == 2'd2) ? 11'd784  : (mon_v == 2'd3) ? 11'd906  : 11'd525;
 
-reg [9:0] hcnt;
-reg [9:0] vcnt;
+reg [10:0] hcnt;
+reg [10:0] vcnt;
 
 wire hactive = (hcnt < H_ACT);
 wire vactive = (vcnt < V_ACT);
@@ -346,10 +384,12 @@ always @(posedge clk) begin
 end
 assign vbl_start = vbl_s ^ vbl_s_d;
 
-// pixels per 32-bit word by depth: 32/16/8/4 for 1/2/4/8bpp
+// pixels per 32-bit word by depth: 32/16/8/4/2/1 for 1/2/4/8/16/24bpp
 wire [5:0] pix_per_word = (mode_v == 3'd0) ? 6'd32 :
                           (mode_v == 3'd1) ? 6'd16 :
-                          (mode_v == 3'd2) ? 6'd8  : 6'd4;
+                          (mode_v == 3'd2) ? 6'd8  :
+                          (mode_v == 3'd3) ? 6'd4  :
+                          (mode_v == 3'd5) ? 6'd2  : 6'd1;
 
 // Fetch pipeline: a trigger at cycle T presents vid_addr during T+1, the
 // platform registers the VRAM read at the T+1 edge, and fetch_word
@@ -367,9 +407,20 @@ assign vid_addr = fetch_addr[21:2];
 // current word: the freshly fetched one on a refill boundary
 wire [31:0] cur = (shcnt == 0) ? fetch_word : shreg;
 assign clut_idx = (mode_v == 3'd3) ? cur[31:24] :
-                      (mode_v == 3'd0) ? {7'd0, cur[31]} :
-                      (mode_v == 3'd1) ? {6'd0, cur[31:30]} :
-                                         {4'd0, cur[31:28]};
+                  (mode_v == 3'd0) ? {7'd0, cur[31]} :
+                  (mode_v == 3'd1) ? {6'd0, cur[31:30]} :
+                                     {4'd0, cur[31:28]};
+
+// Direct color unpack:
+// 16 bpp: x555 RGB
+wire [7:0] dir16_r = {cur[30:26], cur[30:28]};
+wire [7:0] dir16_g = {cur[25:21], cur[25:23]};
+wire [7:0] dir16_b = {cur[20:16], cur[20:18]};
+
+// 24/32 bpp: 888 RGB
+wire [7:0] true_r  = cur[23:16];
+wire [7:0] true_g  = cur[15:8];
+wire [7:0] true_b  = cur[7:0];
 
 reg       act_q;                  // active-video, aligned with the CLUT read
 reg [63:0] diagnostic_latch = 0, diagnostic_meta, diagnostic_v;
@@ -423,12 +474,12 @@ function [14:0] hex_glyph(input [3:0] digit);
 	endcase
 endfunction
 
-wire [9:0] diagnostic_x = hcnt - 10'd32;
+wire [10:0] diagnostic_x = hcnt - 11'd32;
 wire diagnostic_error_row = vcnt >= 128;
 wire diagnostic_test_row = vcnt >= 96 && !diagnostic_error_row;
 wire diagnostic_platform_row = vcnt >= 64 && !diagnostic_test_row && !diagnostic_error_row;
-wire [9:0] diagnostic_y = vcnt - (diagnostic_error_row ? 10'd128 : diagnostic_test_row ? 10'd96 :
-                                                diagnostic_platform_row ? 10'd64 : 10'd32);
+wire [10:0] diagnostic_y = vcnt - (diagnostic_error_row ? 11'd128 : diagnostic_test_row ? 11'd96 :
+                                                diagnostic_platform_row ? 11'd64 : 11'd32);
 wire [3:0] diagnostic_digit = diagnostic_error_row ?
                              error_v[63 - diagnostic_x[7:4]*4 -: 4] : diagnostic_test_row ?
                              test_v[63 - diagnostic_x[7:4]*4 -: 4] : diagnostic_platform_row ?
@@ -448,9 +499,18 @@ always @(posedge clk_vid) begin
 	else diagnostic_rgb <= {{8{hcnt[7]}}, {8{hcnt[6]}}, {8{hcnt[5]}}};
 end
 reg       hb_r, vb_r;
-assign vga_r = act_q ? (diagnostic_v_en ? diagnostic_rgb[23:16] : clut_r) : 8'd0;
-assign vga_g = act_q ? (diagnostic_v_en ? diagnostic_rgb[15:8] : clut_g) : 8'd0;
-assign vga_b = act_q ? (diagnostic_v_en ? diagnostic_rgb[7:0] : clut_b) : 8'd0;
+assign vga_r = !act_q ? 8'd0 : diagnostic_v_en ? diagnostic_rgb[23:16] :
+               (mode_v == 3'd4) ? true_r :
+               (mode_v == 3'd5) ? dir16_r : clut_r;
+
+assign vga_g = !act_q ? 8'd0 : diagnostic_v_en ? diagnostic_rgb[15:8] :
+               (mode_v == 3'd4) ? true_g :
+               (mode_v == 3'd5) ? dir16_g : clut_g;
+
+assign vga_b = !act_q ? 8'd0 : diagnostic_v_en ? diagnostic_rgb[7:0] :
+               (mode_v == 3'd4) ? true_b :
+               (mode_v == 3'd5) ? dir16_b : clut_b;
+
 assign vga_hb = hb_r;
 assign vga_vb = vb_r;
 
@@ -466,13 +526,35 @@ always @(posedge clk_vid) begin
 		fetch_addr <= 0; fetch_word <= 0; fpipe <= 0;
 		act_q <= 0;
 		line_base_next <= 0;
+		vid_col_word <= 10'd0;
+		vid_line_req <= 1'b0;
+		vid_line_addr <= 21'd0;
+		vid_line_swap <= 1'b0;
 	end
 	else begin
+		vid_line_req  <= 1'b0;
+		vid_line_swap <= 1'b0;
+
 		if (hcnt == H_TOT-1) begin
 			hcnt <= 0;
-			vcnt <= (vcnt == V_TOT-1) ? 10'd0 : vcnt + 1'b1;
+			vcnt <= (vcnt == V_TOT-1) ? 11'd0 : vcnt + 1'b1;
 		end
 		else hcnt <= hcnt + 1'b1;
+
+		// Scanline prefetch trigger to the DDR3 DMA, 16 pixels into the line:
+		// the buffer swap at H_TOT-3 and this request cross into clk_sys
+		// through separate synchronizers, and at 70 MHz three pixels would be
+		// under two clk_sys cycles between them
+		if (hcnt == 11'd16) begin
+			if (vcnt == V_TOT-1) begin
+				vid_line_addr <= fb_base_v;
+				vid_line_req  <= 1'b1;
+			end
+			else if (vcnt < V_ACT-1) begin
+				vid_line_addr <= fb_base_v + line_base_next[20:0];
+				vid_line_req  <= 1'b1;
+			end
+		end
 
 		// outputs registered once, so blanks/syncs stay pixel-aligned
 		vga_hs <= ~((hcnt >= H_ACT+H_FP) && (hcnt < H_ACT+H_FP+H_SYNC));
@@ -484,8 +566,10 @@ always @(posedge clk_vid) begin
 		if (fpipe[1]) fetch_word <= vid_rdata;
 
 		if (hcnt == H_TOT-3) begin
+			vid_col_word  <= 10'd0;
 			// prime the next line (or frame) while still in the blank
 			if ((vcnt < V_ACT-1) || (vcnt == V_TOT-1)) begin
+				vid_line_swap <= 1'b1;
 				fetch_addr <= (vcnt == V_TOT-1) ? {1'b0, fb_base_v}
 				            : {1'b0, fb_base_v} + line_base_next;
 				fpipe <= 2'b01;
@@ -501,17 +585,20 @@ always @(posedge clk_vid) begin
 				shreg <= (mode_v == 3'd0) ? {cur[30:0], 1'b0} :
 				         (mode_v == 3'd1) ? {cur[29:0], 2'b0} :
 				         (mode_v == 3'd2) ? {cur[27:0], 4'b0} :
-				                            {cur[23:0], 8'b0};
+				         (mode_v == 3'd3) ? {cur[23:0], 8'b0} :
+				         (mode_v == 3'd5) ? {cur[15:0], 16'b0} : 32'd0;
 				shcnt <= pix_per_word - 1'b1;
 				fetch_addr <= fetch_addr + 22'd4;
 				fpipe <= 2'b01;
+				vid_col_word <= vid_col_word + 1'b1;
 			end
 			else begin
 				shcnt <= shcnt - 1'b1;
 				shreg <= (mode_v == 3'd0) ? {shreg[30:0], 1'b0} :
 				         (mode_v == 3'd1) ? {shreg[29:0], 2'b0} :
 				         (mode_v == 3'd2) ? {shreg[27:0], 4'b0} :
-				                            {shreg[23:0], 8'b0};
+				         (mode_v == 3'd3) ? {shreg[23:0], 8'b0} :
+				         (mode_v == 3'd5) ? {shreg[15:0], 16'b0} : 32'd0;
 			end
 		end
 

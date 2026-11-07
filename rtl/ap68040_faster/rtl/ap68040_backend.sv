@@ -152,9 +152,8 @@ module ap68040_backend
 	output logic        dbg_retire,
 	output logic        dbg_retire2,    // ... and a second instruction (the second slot)
 	output logic        halted,
-	output logic        fetch_stop,     // no new instruction fetches: stopped
+	output logic        fetch_stop      // no new instruction fetches: stopped
                                         // (STOP) or halted
-	output logic  [7:0] fp_mvslots
 );
 
 // the SR bits the 68040 keeps: T1 T0 S M I2-I0 X N Z V C
@@ -251,10 +250,9 @@ logic        fp_hold, fp_dkill, fp_taken, fp_xnext, fp_xcommit, fp_stkill;
 logic [31:0] fp_res, fp_xaddr;
 logic  [7:0] fp_xvec;
 logic  [3:0] fp_xfmt;
-// logic  [7:0] fp_mvslots; (now output port)
+logic  [7:0] fp_mvslots;
 logic  [2:0] fp_crslots;
 logic  [4:0] fp_svwords, fp_rswords;
-logic [31:0] fp_get1, fp_get2;
 logic  [2:0] fwe, bwe;
 logic  [1:0] fwe_ag;           // fwe[0..1] without the advance (AG holds an update)
 logic  [4:0] fwa [3], bwa [3];
@@ -703,7 +701,13 @@ logic        md_go;           // this EX uop has started the unit
 logic        md_fin;          // ... and the unit has finished (done is a pulse: EX may
                               // be stalled by WB in that cycle)
 logic        md_z;            // ... is a divide by zero (from its second cycle)
-wire         ex_is_md   = (ex_u.op == OP_MUL) || (ex_u.op == OP_DIV);
+// EX's opcode classes, registered with ex_u when it loads (ex_u is written
+// nowhere else), so the EX hold -- which every earlier stage's stall waits
+// on -- reads flops instead of 7-bit opcode compares.  At 60/66 MHz the
+// compare -> stall_ex -> stall_dc2 -> register-file write enable cone was
+// the worst CPU-clock path.
+logic        ex_md_q, ex_fp_q, ex_dbcc_q, ex_slow_q;
+wire         ex_is_md   = ex_md_q;
 wire         ex_div0    = (ex_u.op == OP_DIV) &&
                           ((ex_u.sz == SZ_W) ? (ex_av[15:0] == 16'd0) : (ex_av == 32'd0));
 assign ex_md_start = ex_v && ex_is_md && !md_go && !ex_div0 && !md_busy && !ex_fault;
@@ -726,9 +730,7 @@ ap68040_muldiv #(.DSTEPS(DIV_STEPS)) md (
 );
 
 // FPU: OP_FPU uops act once no older uop is in flight (WB empty)
-wire         ex_is_fp = (ex_u.op == OP_FPU);
-wire dc2_disp = adv_dc2 && (dc2_u.op == OP_FPU) && (dc2_u.cond == 4'd1) &&
-                (dc2_u.pc == ex_u.pc) && (dc2_u.exc == 8'd0);
+wire         ex_is_fp = ex_fp_q;
 
 generate if (HAS_FPU) begin : g_fpu
 ap68040_fpif #(.FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_PIPE)) fpif (
@@ -738,13 +740,12 @@ ap68040_fpif #(.FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_PIPE)) fpif (
 	.imm(ex_u.imm[7:0]), .immb(ex_u.imm_b[7:0]),
 	.av(ex_av), .bv(ex_bv), .aw(ex_a[15:0]), .bw(ex_b[15:0]),
 	.dw_a(dc2_a[15:0]), .dw_b(dc2_b[15:0]), .dw_ld(!stall_ex), .latch(ex_latch), .ea(ex_ea), .pc(ex_u.pc),
-	.safe(!wb_v || wb_fpchk), .adv(adv_ex), .kill(kill_now), .dynk(ex_u.dynk[2:0]), .dc2_disp(dc2_disp),
+	.safe(!wb_v || wb_fpchk), .adv(adv_ex), .kill(kill_now),
 	.hold(fp_hold), .res(fp_res), .dkill(fp_dkill), .taken(fp_taken),
 	.xvec(fp_xvec), .xfmt(fp_xfmt), .xnext(fp_xnext), .xaddr(fp_xaddr),
 	.xcommit(fp_xcommit), .st_kill(fp_stkill),
 	.mv_slots(fp_mvslots), .cr_slots(fp_crslots),
-	.sv_words(fp_svwords), .rs_words(fp_rswords),
-	.get_w1(fp_get1), .get_w2(fp_get2)
+	.sv_words(fp_svwords), .rs_words(fp_rswords)
 );
 
 end
@@ -767,8 +768,6 @@ else begin : g_lc040
     assign fp_crslots = 0;
     assign fp_svwords = 0;
     assign fp_rswords = 0;
-    assign fp_get1 = 0;
-    assign fp_get2 = 0;
 end endgenerate
 
 // EX holds while the unit runs, until the cycle its result is presented
@@ -789,7 +788,7 @@ assign ex_hold = (ex_v && ex_is_md && !md_z && !ex_fault && !md_done && !md_fin)
 // the floor (NeXT: 9 clocks at 55 MHz for the ROM's 4 clocks at 25 MHz).
 logic [3:0] dbf_cnt;
 logic       dbf_nz;
-assign dbf_hold = ex_v && (ex_u.op == OP_DBCC) && dbf_nz;
+assign dbf_hold = ex_v && ex_dbcc_q && dbf_nz;
 always_ff @(posedge clk) begin
 	if (!nreset) begin
 		dbf_cnt <= 4'd0;
@@ -1071,7 +1070,7 @@ typedef struct packed {
 	logic [15:0] sr_new;
 } exo_t;
 
-wire  ex_slow = is_slow(ex_u.op);
+wire  ex_slow = ex_slow_q;
 // shifts and rotates: N and Z are the result's sign and zero test at the
 // size, taken in the second cycle from the registered result (the barrel
 // shift and a 32-bit zero test do not fit one cycle with the count logic)
@@ -1374,11 +1373,6 @@ always_comb begin
 		OP_CAS2W: begin
 			ex_st     = (ex_u.cond[0] && !cas2_eq) ? ex_bv : ex_av;
 			ex_stkill = !ex_u.cond[0] && !cas2_eq;
-		end
-		OP_MOV: begin
-			if (ex_u.mem == M_ST && ex_u.cond == 4'd1) ex_st = fp_get1;
-			else if (ex_u.mem == M_ST && ex_u.cond == 4'd2) ex_st = fp_get2;
-			else ex_st = ex_res;
 		end
 		default: ex_st = ex_res;
 	endcase
@@ -1936,6 +1930,10 @@ dc1_a1  <= ag_s.agop ? ag1_val :
 		//------------------------------------------------------------------
 		if (adv_dc2) begin
 			ex_u     <= dc2_u;
+			ex_md_q  <= (dc2_u.op == OP_MUL) || (dc2_u.op == OP_DIV);
+			ex_fp_q  <= (dc2_u.op == OP_FPU);
+			ex_dbcc_q <= (dc2_u.op == OP_DBCC);
+			ex_slow_q <= is_slow(dc2_u.op);
 			ex_npc   <= dc2_u.pc + {27'd0, dc2_u.ilen, 1'b0};
 			ex_kc    <= {dc2_u.op == OP_CAS2R, dc2_u.op == OP_CHK2B,
 			             dc2_u.op == OP_DBCC, dc2_u.op == OP_MDRES, dc2_u.op == OP_DIV,

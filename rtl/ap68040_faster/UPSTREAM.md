@@ -1,7 +1,6 @@
 # Pipelined LC040
 
-Source: `alanswx/MacQuadra800_MiSTer`, `pipelined-040-small33`,
-revision `82122463f51cc22d61164aa343178188cb225953`.
+Source: `alanswx/MacQuadra800_MiSTer`, `pipelined-040-small33`, revision `82122463f51cc22d61164aa343178188cb225953`, updated on branch `exp/lean-ddr3-vram` to `dual-memory-ddr3-lean` at `b370a056ca5ddde770c9dd6dae57938c27265d44` (three-way merge over small33; lean backs out the FPU store/FMOVEM speedups and 16 KB caches and registers EX's opcode classes). Local microcode slots 900-909 remain unused by the lean tables (highest donor slot 651).
 Donor hashes and adaptation flags are in `docs/imports.json`.
 Generated tables and the license are preserved.
 

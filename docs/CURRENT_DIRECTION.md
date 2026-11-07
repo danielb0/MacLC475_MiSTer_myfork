@@ -14,6 +14,10 @@ Updated 2026-11-04.
 - OSD: Dani's computer-core layout. Memory/monitor wait for reset; aspect
   and scale apply live. Diagnostics need `MACLC475_DEBUG` (P9).
 
+## Experiment
+
+- `exp/lean-ddr3-vram`: lean Q800 CPU + DDR3 VRAM + ROM cache + store buffer, no FPU. See `CPU_DONOR.md`. Awaiting fit and hardware comparison against `diag/swim2-trace`/`codex/small33-lc040`.
+
 ## State
 
 - Guest: 7.5.3 CD install to SCSI HDD, 7.5.5 update via floppy, reboots and

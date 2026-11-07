@@ -56,7 +56,7 @@ module quadra605
 	// 4 MB soldered RAM plus an optional SIMM, latched on reset.
 	// 0=4 MB, 1=5 MB, 2=6 MB, 3=8 MB, 4=12 MB, 5=20 MB, 6=36 MB.
 	input   [2:0] ram_cfg,
-	input         mon_12in,      // DAFB monitor: 0 = 13" 640x480, 1 = 12" 512x384
+	input   [1:0] mon_sel,       // DAFB monitor (dafb.sv): 0 = 13" 640x480, 1 = 12" 512x384
 
 	// platform memory beat port
 	output reg        mem_req,
@@ -73,6 +73,7 @@ module quadra605
 	output reg  [3:0] mem_wp_be,
 	output reg [31:0] mem_wp_data,
 	input             mem_wq_room,
+	input             mem_vram_wq_room,
 	// a VRAM write straight into the VRAM block RAM at mem_addr/be/wdata,
 	// with mem_req low (2026-09-26)
 	output reg        mem_vram_wp,
@@ -90,6 +91,10 @@ module quadra605
 	output     [21:2] vid_addr,
 	input      [31:0] vid_rdata,
 	output     [13:0] vid_stride,
+	output      [9:0] vid_col_word,
+	output            vid_line_req,
+	output     [20:0] vid_line_addr,
+	output            vid_line_swap,
 	output      [7:0] VGA_R,
 	output      [7:0] VGA_G,
 	output      [7:0] VGA_B,
@@ -556,7 +561,7 @@ memcjr #(.CLK_HZ(CLK_HZ)) memc (
 dafb dafb (
 	.clk_vid(clk_vid),
 	.nreset_vid(nreset_vid),
-	.mon_12in(mon_12in),
+	.mon_sel(mon_sel),
 	.diagnostic(video_diagnostic),
 	.diagnostic_platform({video_platform_status, 8'h61, startup_flags}),
 `ifdef SWIM2
@@ -584,6 +589,10 @@ dafb dafb (
 	.vid_addr(vid_addr),
 	.vid_rdata(vid_rdata),
 	.vid_stride(vid_stride),
+	.vid_col_word(vid_col_word),
+	.vid_line_req(vid_line_req),
+	.vid_line_addr(vid_line_addr),
+	.vid_line_swap(vid_line_swap),
 
 	.vga_r(VGA_R),
 	.vga_g(VGA_G),
@@ -748,6 +757,7 @@ wire [31:0] bus_wr_left  = (bus_size == 2'd0) ? {bus_wdata[7:0], 24'd0} :
 // buffer behind it (the platform fixture: 914k such stores per Whetstone
 // loop, the buffer full 15 % of the time).  mem_wq_room means two free
 // entries, and nothing else pushes between the halves.
+reg         wr_split_vram;
 reg  [31:2] wr_split_addr;
 reg   [3:0] wr_split_be;
 reg  [31:0] wr_split_data;
@@ -767,8 +777,9 @@ wire bus_wr_direct = (DIRECT_WRITES != 0) && (svc == S_IDLE) && !walker_pend && 
 // clocks later at the earliest, after the write has landed.
 wire bus_vram_direct = (DIRECT_WRITES != 0) && (svc == S_IDLE) && !walker_pend && !cpu_berr &&
 	                   !bus_miss_ack && !bus_line_ack && !bus_adapter_active && !wr_split_pend &&
-	                   !bus_ack_adapter && bus_req && bus_write && !bus_wr_span &&
-	                   (decode(bus_addr[31:2]) == 3'd2);
+	                   !bus_ack_adapter && bus_req && bus_write &&
+	                   (!bus_wr_span || (decode(bus_addr[31:2] + 30'd1) == 3'd2)) &&
+	                   (decode(bus_addr[31:2]) == 3'd2) && mem_vram_wq_room;
 
 // A VRAM read inside one longword goes the way of a RAM first miss: into
 // S_MEM from bus_req, acknowledged through bus_miss_ack with the bytes
@@ -837,6 +848,7 @@ always @(posedge clk) begin
 		b_rdata      <= 0;
 		bus_miss_ack   <= 0;
 		wr_split_pend  <= 0;
+		wr_split_vram  <= 0;
 		bus_miss_rdata <= 0;
 		mem_wp_valid   <= 0;
 		mem_wp_addr    <= 0;
@@ -876,10 +888,19 @@ always @(posedge clk) begin
 		// P214: the spanning store's second longword, ahead of everything
 		if (wr_split_pend) begin
 			wr_split_pend  <= 0;
-			mem_wp_valid   <= 1;
-			mem_wp_addr    <= wr_split_addr;
-			mem_wp_be      <= wr_split_be;
-			mem_wp_data    <= wr_split_data;
+			wr_split_vram  <= 0;
+			if (wr_split_vram) begin
+				mem_vram_wp    <= 1;
+				mem_addr       <= wr_split_addr;
+				mem_be         <= wr_split_be;
+				mem_wdata      <= wr_split_data;
+			end
+			else begin
+				mem_wp_valid   <= 1;
+				mem_wp_addr    <= wr_split_addr;
+				mem_wp_be      <= wr_split_be;
+				mem_wp_data    <= wr_split_data;
+			end
 			bus_miss_ack   <= 1;
 			bus_miss_rdata <= 0;
 		end
@@ -943,6 +964,7 @@ always @(posedge clk) begin
 					if (bus_wr_span) begin
 						// the tail: the bytes from the next longword's offset 0
 						wr_split_pend <= 1;
+						wr_split_vram <= 0;
 						wr_split_addr <= bus_ram_next[29:0];
 						wr_split_be   <= 4'b1111 << (4'd8 - {1'b0, bus_wr_end});
 						wr_split_data <= bus_wr_left << {3'd4 - {1'b0, bus_addr[1:0]}, 3'd0};
@@ -957,8 +979,18 @@ always @(posedge clk) begin
 					mem_addr       <= bus_addr[31:2];
 					mem_be         <= (4'b1111 << (3'd4 - bus_wr_bytes)) >> bus_addr[1:0];
 					mem_wdata      <= bus_wr_left >> {bus_addr[1:0], 3'd0};
-					bus_miss_ack   <= 1;
-					bus_miss_rdata <= 0;
+					if (bus_wr_span) begin
+						// the tail: the bytes from the next longword's offset 0
+						wr_split_pend <= 1;
+						wr_split_vram <= 1;
+						wr_split_addr <= bus_addr[31:2] + 30'd1;
+						wr_split_be   <= 4'b1111 << (4'd8 - {1'b0, bus_wr_end});
+						wr_split_data <= bus_wr_left << {3'd4 - {1'b0, bus_addr[1:0]}, 3'd0};
+					end
+					else begin
+						bus_miss_ack   <= 1;
+						bus_miss_rdata <= 0;
+					end
 				end
 				else if (!walker_pend && line_cpu_match) begin
 					b_ack   <= 1;

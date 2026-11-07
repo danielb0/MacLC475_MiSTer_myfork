@@ -6,11 +6,13 @@
 //  registered 1-cycle video scanout port.  Here:
 //   - RAM (4-36 MB) lives in SDRAM; ROM (1 MB) lives in DDR3.
 //     ROM writes are acknowledged and discarded.
-//   - VRAM is on-chip BRAM, 320 KB physical, advertised as 512 KB: the
-//     driver's 1024-byte row pitch is compacted to the 640 bytes each
-//     row can actually show, so every row of every depth is backed
-//     exactly once — see the VRAM section.  The DAFB scanout expects
-//     registered 1-cycle reads.  Still the main BRAM consumer.
+//   - VRAM is 1 MB in DDR3 (rtl/vram_ddr3.sv, from the lean Q800 DDR3
+//     branch): CPU beats through its read cache and write queue, the DAFB
+//     scanout from a ping-pong scanline cache filled by line DMA.
+//     VERILOG_MACRO "VRAM_BRAM=1" restores the old on-chip VRAM (320 KB
+//     physical, advertised as 512 KB, row-pitch compaction).
+//   - ROM reads go through a 128 KB on-chip cache in front of DDR3
+//     (rtl/rom_cache_128k.sv); "ROM_CACHE_OFF=1" removes it.
 //   - The ROM uploads as boot0.rom (ioctl index 0) into the DDR3 ROM
 //     region; the machine is held in reset until it lands.
 //   - The SCSI disk is hps_io block device 0 (mount a .hda in the OSD);
@@ -566,8 +568,17 @@ wire        mem_is_rom  = (mem_memsel == 2'd1);
 wire        mem_is_vram = !mem_is_ram && !mem_is_rom;
 
 wire [21:2] vid_addr;
+`ifdef VRAM_BRAM
 reg  [31:0] vid_rdata;
+`else
+wire [31:0] vid_rdata;
+`endif
 wire [13:0] vid_stride;
+wire  [9:0] vid_col_word;                  // DDR3 VRAM scanline handshake
+wire        vid_line_req;
+wire [20:0] vid_line_addr;
+wire        vid_line_swap;
+wire        vram_wq_room;
 
 wire [255:0] m_debug_status;
 wire [127:0] m_debug_status2;
@@ -650,7 +661,7 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.clk_vid(clk_vid),
 	.nreset_vid(nreset_vid),
 	.ram_cfg(ram_cfg),
-	.mon_12in(mon_12in),
+	.mon_sel({1'b0, mon_12in}),
 
 	.mem_req(mem_req),
 	.mem_write(mem_write),
@@ -665,6 +676,7 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.mem_wp_be(mem_wp_be),
 	.mem_wp_data(mem_wp_data),
 	.mem_wq_room(sdr_wq_room),
+	.mem_vram_wq_room(vram_wq_room),
 	.mem_vram_wp(mem_vram_wp),
 	.mem_line_valid(sdr_line_valid),
 	.mem_line_tag(sdr_line_tag),
@@ -678,6 +690,10 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.vid_addr(vid_addr),
 	.vid_rdata(vid_rdata),
 	.vid_stride(vid_stride),
+	.vid_col_word(vid_col_word),
+	.vid_line_req(vid_line_req),
+	.vid_line_addr(vid_line_addr),
+	.vid_line_swap(vid_line_swap),
 	.VGA_R(mac_vga_r),
 	.VGA_G(mac_vga_g),
 	.VGA_B(mac_vga_b),
@@ -1007,9 +1023,13 @@ assign sdr_rdata = sdr_beat_rdata;
 // The ack the machine sees is this bridge's, the VRAM port's or the ROM one;
 // they are never asserted together, because mem_memsel picks exactly one
 // consumer.  A VRAM beat is acknowledged in its second clock, straight from
-// the block RAM's output (vram_ack, below).
+// the block RAM's output, or by vram_ddr3 (vram_ack, below).
 wire        vram_ack;
+`ifdef VRAM_BRAM
 reg  [31:0] vram_qa;
+`else
+wire [31:0] vram_qa;
+`endif
 assign mem_ack   = mem_ack_r | sdr_ack | vram_ack;
 assign mem_rdata = sdr_ack ? sdr_rdata : mem_is_vram ? vram_qa : mem_rdata_r;
 
@@ -1051,6 +1071,16 @@ sdram_beat32 #(.RAM_CLK_HZ(RAM_CLK_HZ)) sdr
 	.SDRAM_CLK (SDRAM_CLK)
 );
 
+// DDR3 VRAM client port to the bridge below (tied off under VRAM_BRAM)
+wire        vram_ddr_req, vram_ddr_we;
+wire [28:0] vram_ddr_addr;
+wire  [7:0] vram_ddr_burstcnt;
+wire [63:0] vram_ddr_din;
+wire  [7:0] vram_ddr_be;
+wire        vram_ddr_ack;
+wire        vram_ddr_rvalid;
+
+`ifdef VRAM_BRAM
 //////////////////////////////////////////////////////////////////
 // VRAM — on-chip, true dual port: CPU beats on port A (2-cycle
 // handshake: capture, then deliver), DAFB scanout on port B with the
@@ -1145,6 +1175,71 @@ always @(posedge clk_vid)
 	vid_rdata <= {vram3[vb_addr], vram2[vb_addr],
 	              vram1[vb_addr], vram0[vb_addr]};
 
+// the port-A phase toggles with each VRAM beat (was in the DDR3 bridge)
+always @(posedge clk_sys) begin
+	if (mem_req && mem_is_vram) vram_ph <= !vram_ph;
+	if (reset && !ioctl_download) vram_ph <= 0;
+end
+
+assign vram_wq_room      = 1'b1;
+assign vram_ddr_req      = 1'b0;
+assign vram_ddr_we       = 1'b0;
+assign vram_ddr_addr     = 29'd0;
+assign vram_ddr_burstcnt = 8'd0;
+assign vram_ddr_din      = 64'd0;
+assign vram_ddr_be       = 8'd0;
+`else
+//////////////////////////////////////////////////////////////////
+// VRAM — 1 MB in DDR3 with an M10K ping-pong scanline cache
+// (rtl/vram_ddr3.sv, imported from the lean Q800 DDR3 branch).  Flat, no
+// pitch compaction: the ROM's size probe wraps at 1 MB, so it advertises
+// 1 MB of VRAM (a real LC 475 with the VRAM SIMM).  CPU beats go through
+// the module's read cache and write queue (vram_wq_room gates the
+// machine's direct VRAM writes); the scanout reads a line the DMA
+// fetched during the previous one.
+//////////////////////////////////////////////////////////////////
+localparam [28:0] DDR_VRAM_BASE = 29'h0500_0000;   // byte 0x2800_0000 >> 3
+
+vram_ddr3 #(
+	.DDR_VRAM_BASE(DDR_VRAM_BASE),
+	.VRAM_1MB(1)
+) vram_inst (
+	.clk_sys(clk_sys),
+	.reset(reset),
+
+	.mem_req(mem_req),
+	.mem_is_vram(mem_is_vram),
+	.mem_write(mem_write),
+	.mem_addr(mem_addr),
+	.mem_be(mem_be),
+	.mem_wdata(mem_wdata),
+	.mem_vram_wp(mem_vram_wp),
+	.vram_ack(vram_ack),
+	.vram_rdata(vram_qa),
+	.vram_wq_room(vram_wq_room),
+
+	.clk_vid(clk_vid),
+	.reset_vid(!nreset_vid),
+	.vid_col_word(vid_col_word),
+	.vid_stride(vid_stride),
+	.vid_line_req(vid_line_req),
+	.vid_line_addr(vid_line_addr),
+	.vid_line_swap(vid_line_swap),
+	.vid_rdata(vid_rdata),
+
+	.vram_ddr_req(vram_ddr_req),
+	.vram_ddr_we(vram_ddr_we),
+	.vram_ddr_addr(vram_ddr_addr),
+	.vram_ddr_burstcnt(vram_ddr_burstcnt),
+	.vram_ddr_din(vram_ddr_din),
+	.vram_ddr_be(vram_ddr_be),
+	.vram_ddr_busy(DDRAM_BUSY),
+	.vram_ddr_ack(vram_ddr_ack),
+	.vram_ddr_dout(DDRAM_DOUT),
+	.vram_ddr_rvalid(vram_ddr_rvalid)
+);
+`endif
+
 //////////////////////////////////////////////////////////////////
 // DDR3 bridge — RAM + ROM regions, plus the boot0.rom upload path.
 // 64-bit word convention: the machine's 32-bit word at byte address A
@@ -1160,6 +1255,19 @@ localparam [28:0] DDR_ROM_BASE = 29'h0700_0000;   // byte 0x3800_0000 >> 3
 // physical 0x1FF00000, the area the Minimig A2065 and the MacLC card use too.
 localparam [28:0] DDR_ETH_BASE = 29'h03FE_0000;   // byte 0x1FF0_0000 >> 3
 
+// the VRAM client's bursts (rtl/vram_ddr3.sv): reads are acknowledged on
+// issue and their beats counted back; a write burst holds DDRAM_WE and
+// streams vram_ddr_din/be until every beat is taken
+reg        ddr_wait_vram = 1'b0;
+reg  [7:0] ddr_vram_beats_left = 8'd0;
+reg        ddr_wait_vram_wr = 1'b0;
+reg  [7:0] ddr_vram_wr_beats_left = 8'd0;
+reg        vram_ddr_accept = 1'b0;
+reg        vram_rd_ack = 1'b0;
+wire       vram_wr_ack = ddr_wait_vram_wr && !DDRAM_BUSY;
+assign     vram_ddr_ack = vram_wr_ack || vram_rd_ack;
+assign     vram_ddr_rvalid = ddr_wait_vram && DDRAM_DOUT_READY;
+
 reg  [7:0] ddram_burstcnt;
 reg [28:0] ddram_addr;
 reg [63:0] ddram_din;
@@ -1167,8 +1275,9 @@ reg  [7:0] ddram_be;
 reg        ddram_we, ddram_rd;
 assign DDRAM_BURSTCNT = ddram_burstcnt;
 assign DDRAM_ADDR     = ddram_addr;
-assign DDRAM_DIN      = ddram_din;
-assign DDRAM_BE       = ddram_be;
+// a VRAM write burst streams the client's data/BE beat by beat
+assign DDRAM_DIN      = ddr_wait_vram_wr ? vram_ddr_din : ddram_din;
+assign DDRAM_BE       = ddr_wait_vram_wr ? vram_ddr_be  : ddram_be;
 assign DDRAM_WE       = ddram_we;
 assign DDRAM_RD       = ddram_rd;
 
@@ -1188,9 +1297,70 @@ reg         ddr_rd_beat1;                  // the line's first 64-bit beat is in
 reg        ddr_wait_eth = 1'b0;            // ... for the Ethernet window instead
 assign     eth_mem_rvalid = ddr_wait_eth && DDRAM_DOUT_READY;
 
+// 128 KB on-chip ROM cache (lean Q800): a hit answers in two clocks with
+// no DDR3 trip, so ROM code no longer queues behind the VRAM line DMA.
+// Invalidated on every reset, which a boot0.rom download holds.
+`ifdef ROM_CACHE_OFF
+localparam ROM_CACHE = 0;
+wire        rom_cache_hit  = 1'b0;
+wire [127:0] rom_cache_data = 128'd0;
+`else
+localparam ROM_CACHE = 1;
+wire        rom_cache_hit;
+wire [127:0] rom_cache_data;
+`endif
+reg         rom_cache_fill_we = 1'b0;
+reg  [19:4] rom_cache_fill_addr = 16'd0;
+reg [127:0] rom_cache_fill_data = 128'd0;
+reg         rom_cache_checking = 1'b0;
+reg         rom_ddr_pend = 1'b0;
+
+`ifndef ROM_CACHE_OFF
+rom_cache_128k rom_cache (
+	.clk(clk_sys),
+	.rst(reset),
+	.lookup_req(mem_req && mem_is_rom && !mem_write),
+	.lookup_addr(mem_addr[19:4]),
+	.lookup_hit(rom_cache_hit),
+	.lookup_data(rom_cache_data),
+	.fill_we(rom_cache_fill_we),
+	.fill_addr(rom_cache_fill_addr),
+	.fill_data(rom_cache_fill_data)
+);
+`endif
+
 always @(posedge clk_sys) begin
 	mem_ack_r <= 0;
 	eth_mem_accept <= 0;
+	vram_rd_ack <= 0;
+	rom_cache_fill_we <= 0;
+
+	// djMEMC discards ROM writes
+	if (mem_req && !mem_ack && mem_is_rom && mem_write) mem_ack_r <= 1;
+
+	// ROM read: the on-chip cache first (one clock to look), else DDR3
+	if (rom_cache_checking) begin
+		rom_cache_checking <= 0;
+		if (rom_cache_hit) begin
+			rom_line       <= rom_cache_data;
+			rom_line_tag   <= mem_addr[19:4];
+			rom_line_valid <= 1;
+			case (mem_addr[3:2])
+				2'd0: mem_rdata_r <= rom_cache_data[127:96];
+				2'd1: mem_rdata_r <= rom_cache_data[95:64];
+				2'd2: mem_rdata_r <= rom_cache_data[63:32];
+				2'd3: mem_rdata_r <= rom_cache_data[31:0];
+			endcase
+			mem_ack_r <= 1;
+		end
+		else rom_ddr_pend <= 1;
+	end
+	else if (mem_req && !mem_ack && mem_is_rom && !mem_write && !ddr_wait_data && !rom_ddr_pend) begin
+		if (ROM_CACHE) rom_cache_checking <= 1;
+		else           rom_ddr_pend <= 1;
+	end
+
+	if (!vram_ddr_req && !ddr_wait_vram_wr) vram_ddr_accept <= 0;
 
 	// boot0.rom halfwords: capture, then stall hps_io until written
 	if (ioctl_download && rom_index && ioctl_wr) begin
@@ -1201,13 +1371,20 @@ always @(posedge clk_sys) begin
 	end
 
 	if (!DDRAM_BUSY) begin
-		ddram_we <= 0;
+		if (!ddr_wait_vram_wr) ddram_we <= 0;
 		ddram_rd <= 0;
 	end
 
-	// VRAM beats (BRAM port A): the capture edge, then vram_qa is delivered
-	// with the combinational vram_ack; the machine drops mem_req on it
-	if (mem_req && mem_is_vram) vram_ph <= !vram_ph;
+	if (ddr_wait_vram_wr) begin
+		if (!DDRAM_BUSY) begin
+			ddr_vram_wr_beats_left <= ddr_vram_wr_beats_left - 1'b1;
+			if (ddr_vram_wr_beats_left == 8'd1) begin
+				ddram_we         <= 0;
+				ddr_wait_vram_wr <= 0;
+				if (!vram_ddr_req) vram_ddr_accept <= 0;
+			end
+		end
+	end
 
 	if (ddr_wait_data) begin
 		if (DDRAM_DOUT_READY) begin
@@ -1227,7 +1404,16 @@ always @(posedge clk_sys) begin
 				endcase
 				mem_ack_r   <= 1;
 				ddr_wait_data <= 0;
+				rom_cache_fill_we   <= 1;
+				rom_cache_fill_addr <= rom_line_tag;
+				rom_cache_fill_data <= {rom_line[127:64], DDRAM_DOUT[31:0], DDRAM_DOUT[63:32]};
 			end
+		end
+	end
+	else if (ddr_wait_vram) begin
+		if (DDRAM_DOUT_READY) begin
+			ddr_vram_beats_left <= ddr_vram_beats_left - 1'b1;
+			if (ddr_vram_beats_left == 8'd1) ddr_wait_vram <= 0;
 		end
 	end
 	else if (ddr_wait_eth) begin
@@ -1247,20 +1433,33 @@ always @(posedge clk_sys) begin
 			ioctl_pend     <= 0;
 			ioctl_wait     <= 0;
 		end
-		else if (mem_req && !mem_ack && mem_is_rom) begin
-			if (mem_write) begin
-				mem_ack_r <= 1;            // djMEMC discards ROM writes
+		else if (rom_ddr_pend) begin
+			ddram_addr     <= DDR_ROM_BASE | {12'd0, mem_addr[19:4], 1'b0};
+			ddram_burstcnt <= 8'd2;
+			ddram_rd       <= 1;
+			ddr_rd_word    <= mem_addr[3:2];
+			ddr_rd_beat1   <= 0;
+			rom_line_valid <= 0;
+			rom_line_tag   <= mem_addr[19:4];
+			ddr_wait_data  <= 1;
+			rom_ddr_pend   <= 0;
+		end
+		// the VRAM client: CPU cache fills/misses, write bursts, line DMA
+		else if (vram_ddr_req && !vram_ddr_accept) begin
+			ddram_addr      <= vram_ddr_addr;
+			ddram_burstcnt  <= vram_ddr_burstcnt;
+			ddram_we        <= vram_ddr_we;
+			ddram_rd        <= !vram_ddr_we;
+			if (vram_ddr_we) begin
+				ddr_wait_vram_wr       <= 1;
+				ddr_vram_wr_beats_left <= vram_ddr_burstcnt;
 			end
 			else begin
-				ddram_addr     <= DDR_ROM_BASE | {12'd0, mem_addr[19:4], 1'b0};
-				ddram_burstcnt <= 8'd2;
-				ddram_rd       <= 1;
-				ddr_rd_word    <= mem_addr[3:2];
-				ddr_rd_beat1   <= 0;
-				rom_line_valid <= 0;
-				rom_line_tag   <= mem_addr[19:4];
-				ddr_wait_data  <= 1;
+				ddr_wait_vram       <= 1;
+				ddr_vram_beats_left <= vram_ddr_burstcnt;
+				vram_rd_ack         <= 1;
 			end
+			vram_ddr_accept <= 1;
 		end
 		// The Ethernet mailbox comes last: single 64-bit beats, a few hundred a
 		// second when the link is idle.  A ROM beat that arrives behind one waits
@@ -1282,8 +1481,10 @@ always @(posedge clk_sys) begin
 
 	if (ioctl_download && rom_index) rom_line_valid <= 0;
 	if (reset && !ioctl_download) begin
-		vram_ph <= 0;
 		ddr_wait_data <= 0;
+		ddr_wait_vram <= 0;
+		rom_cache_checking <= 0;
+		rom_ddr_pend <= 0;
 		// ddr_wait_eth is NOT cleared: the bridge will still answer that read, and the
 		// answer must not be taken for the ROM's.
 	end

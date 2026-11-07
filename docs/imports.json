@@ -35,10 +35,10 @@
   {
     "source": "rtl/dafb.sv",
     "destination": "rtl/dafb.sv",
-    "sha256": "e872c2e6cacc463399955cfa68fb26d5585d4fe87f4762a5c35b611d6e84079e",
-    "repository": "https://github.com/meauxdal/MacQuadra800_MiSTer.git",
-    "revision": "689f03d9f5b634062547d1b33d83624ee126604e",
-    "sha256_lf": "e872c2e6cacc463399955cfa68fb26d5585d4fe87f4762a5c35b611d6e84079e",
+    "sha256": "f9f3e37fc28d637f282758cf4d445ef12f99a9c06ce444664c9ee2ef1f71510b",
+    "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "f9f3e37fc28d637f282758cf4d445ef12f99a9c06ce444664c9ee2ef1f71510b",
     "adapted": true
   },
   {
@@ -734,10 +734,10 @@
   {
     "source": "rtl/ap68040_faster/rtl/ap68040.sv",
     "destination": "rtl/ap68040_faster/rtl/ap68040.sv",
-    "sha256": "08d5c6982a098044e330de0e55e67229a9aba8b959333db786d077a7d5035928",
-    "sha256_lf": "08d5c6982a098044e330de0e55e67229a9aba8b959333db786d077a7d5035928",
+    "sha256": "d265a348a15c483ef607dfbbc61ab5ea5cdedf60d11c9c1a69c497f9c1caf7de",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953",
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "d265a348a15c483ef607dfbbc61ab5ea5cdedf60d11c9c1a69c497f9c1caf7de",
     "adapted": true
   },
   {
@@ -767,19 +767,19 @@
   {
     "source": "rtl/ap68040_faster/rtl/ap68040_backend.sv",
     "destination": "rtl/ap68040_faster/rtl/ap68040_backend.sv",
-    "sha256": "ed49ddf1fc13a33c7f364602ab75866051574811622c4ef74fe7688831ffecbe",
-    "sha256_lf": "ed49ddf1fc13a33c7f364602ab75866051574811622c4ef74fe7688831ffecbe",
+    "sha256": "89a49b39d28e800ba57242b8db1aa696af02301b992b17a5cc60391b86071b54",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953",
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "89a49b39d28e800ba57242b8db1aa696af02301b992b17a5cc60391b86071b54",
     "adapted": true
   },
   {
     "source": "rtl/ap68040_faster/rtl/ap68040_biu.sv",
     "destination": "rtl/ap68040_faster/rtl/ap68040_biu.sv",
-    "sha256": "dbcba125769c52d19e71cfd7782628c5787c068dadb907586c9b0454ddc007ca",
-    "sha256_lf": "dbcba125769c52d19e71cfd7782628c5787c068dadb907586c9b0454ddc007ca",
+    "sha256": "b34133f8592af3b1c4cab09432e2c40562baeba576599b849f145ea17625f5fc",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "b34133f8592af3b1c4cab09432e2c40562baeba576599b849f145ea17625f5fc"
   },
   {
     "source": "rtl/ap68040_faster/rtl/ap68040_decode.sv",
@@ -793,27 +793,27 @@
   {
     "source": "rtl/ap68040_faster/rtl/ap68040_dmu.sv",
     "destination": "rtl/ap68040_faster/rtl/ap68040_dmu.sv",
-    "sha256": "f254c87f66dfac38347693e88be19da6de4c065021d7324ae57292ca897d6e44",
-    "sha256_lf": "f254c87f66dfac38347693e88be19da6de4c065021d7324ae57292ca897d6e44",
+    "sha256": "2ee7ffab512958095e018e016cd309059365731e30cc10f405d2b798a4829b74",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953",
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "2ee7ffab512958095e018e016cd309059365731e30cc10f405d2b798a4829b74",
     "adapted": true
   },
   {
     "source": "rtl/ap68040_faster/rtl/ap68040_fetch.sv",
     "destination": "rtl/ap68040_faster/rtl/ap68040_fetch.sv",
-    "sha256": "ffed82c5a513108cf23b0097503e63cb453675c1a620632a56451031177506f5",
-    "sha256_lf": "ffed82c5a513108cf23b0097503e63cb453675c1a620632a56451031177506f5",
+    "sha256": "53b99346f3f2d6868b6e2262953b44905a73bd30b4201aa49a28f975aa3d2c50",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "53b99346f3f2d6868b6e2262953b44905a73bd30b4201aa49a28f975aa3d2c50"
   },
   {
     "source": "rtl/ap68040_faster/rtl/ap68040_fpif.sv",
     "destination": "rtl/ap68040_faster/rtl/ap68040_fpif.sv",
-    "sha256": "887d1a7a4569a4344681307926cf747eea9934419010dbdd84b1fc25dbff4d2b",
-    "sha256_lf": "887d1a7a4569a4344681307926cf747eea9934419010dbdd84b1fc25dbff4d2b",
+    "sha256": "ae7f5fec386e7119114bed277f4f8f3340c9652abbf79ac34c4c89cc038dea58",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "ae7f5fec386e7119114bed277f4f8f3340c9652abbf79ac34c4c89cc038dea58"
   },
   {
     "source": "rtl/ap68040_faster/rtl/ap68040_muldiv.sv",
@@ -858,10 +858,10 @@
   {
     "source": "rtl/ap68040_faster/rtl/ap68040_useq.sv",
     "destination": "rtl/ap68040_faster/rtl/ap68040_useq.sv",
-    "sha256": "1ee438e06bafe77002cfac750a7cf5261437297fad2985e9de22a343442785d0",
-    "sha256_lf": "1ee438e06bafe77002cfac750a7cf5261437297fad2985e9de22a343442785d0",
+    "sha256": "15dcb61fdbbcc80052dba399109d5afac987667087ce794ece09dfb64961c0e9",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953",
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "15dcb61fdbbcc80052dba399109d5afac987667087ce794ece09dfb64961c0e9",
     "adapted": true
   },
   {
@@ -875,26 +875,26 @@
   {
     "source": "rtl/ap68040_faster/rtl/fpu/ap040_fpu.v",
     "destination": "rtl/ap68040_faster/rtl/fpu/ap040_fpu.v",
-    "sha256": "bcb377e318c20acfa44ba38a93212f4f95a94fd826e96a9210db31692f967466",
-    "sha256_lf": "bcb377e318c20acfa44ba38a93212f4f95a94fd826e96a9210db31692f967466",
+    "sha256": "1107d47e2d56067e584e99589c8424c1db2bd41d88ae89b5cd15217cb99b2db0",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "1107d47e2d56067e584e99589c8424c1db2bd41d88ae89b5cd15217cb99b2db0"
   },
   {
     "source": "rtl/ap68040_faster/rtl/gen/ap68040_attr_rom.svh",
     "destination": "rtl/ap68040_faster/rtl/gen/ap68040_attr_rom.svh",
-    "sha256": "1292178ecc0966062c589fe796706e71a02a053b51e0b01dd9c171745edc7df9",
-    "sha256_lf": "1292178ecc0966062c589fe796706e71a02a053b51e0b01dd9c171745edc7df9",
+    "sha256": "e92dcb8faaf72fe9a2d9b16bfa789bf0a459c5fea3a33aad2788199b67c26b29",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "e92dcb8faaf72fe9a2d9b16bfa789bf0a459c5fea3a33aad2788199b67c26b29"
   },
   {
     "source": "rtl/ap68040_faster/rtl/gen/ap68040_dec_pla.svh",
     "destination": "rtl/ap68040_faster/rtl/gen/ap68040_dec_pla.svh",
-    "sha256": "6690a03b5f7211bfe662936053ea7ad8c7f5e14633b604d970078ad8f34c5632",
-    "sha256_lf": "6690a03b5f7211bfe662936053ea7ad8c7f5e14633b604d970078ad8f34c5632",
+    "sha256": "b06400468dbdd448108ac8a36083dab6db9edec8ebb5fa34ac07204950540cfd",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "b06400468dbdd448108ac8a36083dab6db9edec8ebb5fa34ac07204950540cfd"
   },
   {
     "source": "rtl/ap68040_faster/rtl/gen/ap68040_pd_alt.svh",
@@ -915,26 +915,26 @@
   {
     "source": "rtl/ap68040_faster/rtl/gen/ap68040_ucode_init.svh",
     "destination": "rtl/ap68040_faster/rtl/gen/ap68040_ucode_init.svh",
-    "sha256": "142f2478014605085498f5e2e96d46957e8e69e47bb6269562f00dcc03cfad88",
-    "sha256_lf": "142f2478014605085498f5e2e96d46957e8e69e47bb6269562f00dcc03cfad88",
+    "sha256": "5fe17c091e5f510738690a636044913b4dc5596a777840d14c4baa27d3126e2e",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "5fe17c091e5f510738690a636044913b4dc5596a777840d14c4baa27d3126e2e"
   },
   {
     "source": "rtl/ap68040_faster/rtl/gen/ap68040_ucode_rom.svh",
     "destination": "rtl/ap68040_faster/rtl/gen/ap68040_ucode_rom.svh",
-    "sha256": "f6e002f5c9c80fac2cd7eb7b1d0b6c9f2a66153fc30ef1b7e26d1987ecf3560d",
-    "sha256_lf": "f6e002f5c9c80fac2cd7eb7b1d0b6c9f2a66153fc30ef1b7e26d1987ecf3560d",
+    "sha256": "f413b04e9920e91cc9d680cc74608bdd744cdf8e13cd5cd5b5c96e7dc5956a1c",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "f413b04e9920e91cc9d680cc74608bdd744cdf8e13cd5cd5b5c96e7dc5956a1c"
   },
   {
     "source": "rtl/ap68040_faster/rtl/gen/ap68040_upkg.sv",
     "destination": "rtl/ap68040_faster/rtl/gen/ap68040_upkg.sv",
-    "sha256": "446bf1286715ebc85a9f93563b46d8e7c2deb1afa0f565cb1e3748da053f5216",
-    "sha256_lf": "446bf1286715ebc85a9f93563b46d8e7c2deb1afa0f565cb1e3748da053f5216",
+    "sha256": "5f9205f2237273f3eec10af58db51cff4b44571f5955cb9007fae19e932cfda0",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
-    "revision": "82122463f51cc22d61164aa343178188cb225953"
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "5f9205f2237273f3eec10af58db51cff4b44571f5955cb9007fae19e932cfda0"
   },
   {
     "source": "rtl/quadra_cpu040.sv",
@@ -1016,5 +1016,29 @@
     "repository": "https://github.com/meauxdal/MacLC_MiSTer.git",
     "revision": "fd29cdb3ff2c917d76144fe3f429f9e2ef1c9fe8",
     "adapted": true
+  },
+  {
+    "source": "rtl/vram_ddr3.sv",
+    "destination": "rtl/vram_ddr3.sv",
+    "sha256": "c1f32e6c9d5f1efef33396149190aea923ec6a44274ede4220f0bf8a3ea4ac64",
+    "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "c1f32e6c9d5f1efef33396149190aea923ec6a44274ede4220f0bf8a3ea4ac64"
+  },
+  {
+    "source": "rtl/rom_cache_128k.sv",
+    "destination": "rtl/rom_cache_128k.sv",
+    "sha256": "a5e51d3a16096d40a18ab3f52488a2f2841a1100e0144f60aef32b8c2ee86721",
+    "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "a5e51d3a16096d40a18ab3f52488a2f2841a1100e0144f60aef32b8c2ee86721"
+  },
+  {
+    "source": "rtl/wombat_store_buffer.sv",
+    "destination": "rtl/wombat_store_buffer.sv",
+    "sha256": "e54b27d6b4c8e009807327bc9076e33f3e490dd117940038efb46f16cb01d72b",
+    "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",
+    "revision": "b370a056ca5ddde770c9dd6dae57938c27265d44",
+    "sha256_lf": "e54b27d6b4c8e009807327bc9076e33f3e490dd117940038efb46f16cb01d72b"
   }
 ]

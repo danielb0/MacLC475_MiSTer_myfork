@@ -36,6 +36,14 @@ Expect a future donor replacement, rather than tracking every optimization.
   `6f7268457e6888ffadae7e7de7a2dc89521e5031`. Prefer the recommended
   size candidate first. A CPU import does not require importing DDR3 VRAM.
 
+## Lean DDR3 experiment (`exp/lean-ddr3-vram`, 2026-11-07)
+
+- Donor: Alan's `dual-memory-ddr3-lean` at `b370a056ca5ddde770c9dd6dae57938c27265d44` (newest Q800 branch, 2026-11-05; MiSTer-devel's `pipelined-040-ddr3-vram` is older). CPU three-way merged over small33; local LC040 adaptations kept (HAS_FPU, `entry_point`, no-FPU tie-offs). Still DUAL=0, BTIC=0, no FPU, 4 KiB caches, 25 MHz 1:1; lean's 54/27/81 MHz clocking, SYS_HZ and pixel-clock retarget check are not taken.
+- Wrapper: lean's two-entry posted-store queue (`rtl/wombat_store_buffer.sv`) between `quadra_bus040` and the machine, qualified by `store_buffer_ok && lock_n`; `AP040_STORE_BUFFER_OFF=1` removes it.
+- VRAM: `rtl/vram_ddr3.sv` (1 MB in DDR3, scanline DMA, includes the DMA-take race fix `3b1761d`) replaces the 320 KB BRAM VRAM; `VRAM_BRAM=1` restores it. DAFB takes lean's line handshake, 16/24 bpp direct colour and 2-bit monitor select (LC 475 still offers 13"/12" only). 16 bpp detection uses lean's AC842a PCBR1 rule on our Antelope PCBR1; unverified.
+- ROM: lean's 128 KB on-chip ROM cache (`rtl/rom_cache_128k.sv`); `ROM_CACHE_OFF=1` removes it.
+- Checks 2026-11-07: Verilator lint, smoke, lc040 (90), machine (2 runs), mmu (30) PASS; no FPU elaborated; Quartus A&E 0 errors, 194 warnings; imports verify. Fit, timing and hardware not yet run.
+
 ## Next checkpoints
 
 - [x] Review ongoing integration work for new CPU-specific assumptions;
