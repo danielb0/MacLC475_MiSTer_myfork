@@ -5,8 +5,8 @@ mkdir -p local/tests
 sources=$(sed -n 's/.*-name \(SYSTEMVERILOG\|VERILOG\)_FILE .*"\([^"]*\)".*/rtl\/ap68040_faster\/rtl\/\2/p' rtl/ap68040_faster/rtl/ap68040.qip)
 case "${1:-lint}" in
     lint|machine-lint|profile-lint|mmu-lint) mode="--lint-only" ;;
-    smoke|lc040|machine|profile|mmu) mode="--binary --timing -j ${JOBS:-2}" ;;
-    *) echo "Usage: $0 [lint|smoke|lc040|machine|machine-lint|profile|profile-lint|mmu|mmu-lint]" >&2; exit 1 ;;
+    smoke|lc040|machine|profile|profile-ddr3|mmu) mode="--binary --timing -j ${JOBS:-2}" ;;
+    *) echo "Usage: $0 [lint|smoke|lc040|machine|machine-lint|profile|profile-ddr3|profile-lint|mmu|mmu-lint]" >&2; exit 1 ;;
 esac
 top=tb_quadra_cpu040
 bench=tests/tb_quadra_cpu040.sv
@@ -16,13 +16,21 @@ if [ "${1:-lint}" = mmu ] || [ "${1:-lint}" = mmu-lint ]; then
     bench=tests/tb_cpu040_mmu.sv
 fi
 if [ "${1:-lint}" = machine ] || [ "${1:-lint}" = machine-lint ] ||
-   [ "${1:-lint}" = profile ] || [ "${1:-lint}" = profile-lint ]; then
+   [ "${1:-lint}" = profile ] || [ "${1:-lint}" = profile-lint ] ||
+   [ "${1:-lint}" = profile-ddr3 ]; then
     top=tb_cpu040_machine
     bench=tests/tb_cpu040_machine.sv
     sources="$sources $(sed -n 's/^set_global_assignment -name \(SYSTEMVERILOG\|VERILOG\)_FILE \(rtl\/[^ ]*\)$/\2/p' files.qip | sed '/\/pll/d; /\/quadra_cpu040.sv/d; /\/quadra_bus040.sv/d; /\/wombat_store_buffer.sv/d') tests/support/altsyncram_stub.v"
 fi
-verilator $mode --timing -Wno-fatal --top-module "$top" -DCPU_AP68040 \
-    --Mdir "local/tests/obj_cpu040_$top" -Irtl -Irtl/ap68040_faster/rtl \
+# profile-ddr3: the same fixture with rtl/vram_ddr3.sv behind a DDR3 model
+defs=-DCPU_AP68040
+obj="local/tests/obj_cpu040_$top"
+if [ "${1:-lint}" = profile-ddr3 ]; then
+    defs="$defs -DVRAM_DDR3"
+    obj="${obj}_ddr3"
+fi
+verilator $mode --timing -Wno-fatal --top-module "$top" $defs \
+    --Mdir "$obj" -Irtl -Irtl/ap68040_faster/rtl \
     -Irtl/ap68040_faster/rtl/fpu $sources rtl/quadra_bus040.sv \
     rtl/wombat_store_buffer.sv rtl/quadra_cpu040.sv "$bench" \
     >"local/tests/cpu040-$top-build.log" 2>&1 || {
@@ -43,7 +51,12 @@ if [ "${1:-lint}" != lint ]; then
         run_arg=+PROFILE
         run_log=local/tests/cpu040-profile-run.log
     fi
-    "local/tests/obj_cpu040_$top/V$top" $run_arg >"$run_log" 2>&1 || {
+    if [ "${1:-lint}" = profile-ddr3 ]; then
+        # extra plusargs, e.g. PROFILE_ARGS="+DDR_RD_LAT=16 +VID_STRIDE=1280"
+        run_arg="+PROFILE ${PROFILE_ARGS:-}"
+        run_log=local/tests/cpu040-profile-ddr3-run.log
+    fi
+    "$obj/V$top" $run_arg >"$run_log" 2>&1 || {
         tail -n 30 "$run_log"; exit 1;
     }
     grep -E '^(PASS:|PROFILE:)' "$run_log"

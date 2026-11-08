@@ -15,8 +15,17 @@ reg vram_phase = 0;
 reg [31:0] vram_q = 0;
 reg [7:0] vram [0:65535];
 wire vram_req = mem_req && mem_memsel == 2;
+`ifdef VRAM_DDR3
+wire        vram_ddr_ack_w;
+wire [31:0] vram_ddr_q;
+wire        vram_room;
+wire mem_ack = ram_ack || vram_ddr_ack_w;
+wire [31:0] mem_rdata = mem_memsel == 2 ? vram_ddr_q : ram_rdata;
+`else
+wire        vram_room = 1'b1;
 wire mem_ack = ram_ack || (vram_req && vram_phase);
 wire [31:0] mem_rdata = mem_memsel == 2 ? vram_q : ram_rdata;
+`endif
 reg line_valid = 0, rom_line_valid = 0;
 reg [26:4] line_tag = 0;
 reg [19:4] rom_line_tag = 0;
@@ -37,7 +46,7 @@ quadra605 #(.CDROM(0), .SONIC(0)) dut (
     .dbg_sw(3'd0), .eth_ena(1'b0), .adb_diagnostic(1'b0), .video_diagnostic(1'b0),
     .video_platform_status(16'd0), .mem_req(mem_req), .mem_write(mem_write),
     .mem_addr(mem_addr), .mem_be(mem_be), .mem_wdata(mem_wdata), .mem_memsel(mem_memsel),
-    .mem_rdata(mem_rdata), .mem_ack(mem_ack), .mem_wq_room(room), .mem_vram_wq_room(1'b1),
+    .mem_rdata(mem_rdata), .mem_ack(mem_ack), .mem_wq_room(room), .mem_vram_wq_room(vram_room),
     .mem_wp_valid(mem_wp_valid), .mem_wp_addr(mem_wp_addr),
     .mem_wp_be(mem_wp_be), .mem_wp_data(mem_wp_data),
     .mem_vram_wp(mem_vram_wp),
@@ -57,6 +66,118 @@ quadra605 #(.CDROM(0), .SONIC(0)) dut (
 // Exercise CPU interrupt entry at the IOSB output boundary.
 always @* force dut.ipl_n = irq;
 
+`ifdef VRAM_DDR3
+// The production DDR3 VRAM client (rtl/vram_ddr3.sv) against a DDR3 model
+// that follows MacLC475.sv's arbiter: one request at a time, a read acked on
+// issue and its beats returned DDR_RD_LAT clocks later, a write burst taking
+// one beat per clock.  The vram[] array stays the backing store, so the
+// profile's content checks still apply (addresses fold into 64 KB).
+// Scanout: a line prefetch every LINE_CLKS clocks, VID_STRIDE bytes, for
+// 480 of 525 lines.  Plusargs: +DDR_RD_LAT=n +LINE_CLKS=n +VID_STRIDE=n.
+localparam [28:0] TB_VRAM_BASE = 29'h0500_0000;
+integer ddr_rd_lat = 8, line_clks = 1059, vid_stride_bytes = 640;
+initial begin
+    void'($value$plusargs("DDR_RD_LAT=%d", ddr_rd_lat));
+    void'($value$plusargs("LINE_CLKS=%d", line_clks));
+    void'($value$plusargs("VID_STRIDE=%d", vid_stride_bytes));
+end
+wire        vd_req, vd_we;
+wire [28:0] vd_addr;
+wire  [7:0] vd_burstcnt;
+wire [63:0] vd_din;
+wire  [7:0] vd_be;
+reg         vd_accept = 0, vd_rd_ack = 0, vd_wait_wr = 0, vd_wait_rd = 0;
+reg  [16:0] vd_wr_addr, vd_rd_addr;
+reg   [7:0] vd_wr_left, vd_rd_left;
+integer     vd_rd_delay = 0;
+wire        vd_wr_ack = vd_wait_wr;
+wire        vd_rvalid = vd_wait_rd && vd_rd_delay == 0;
+reg  [63:0] vd_dout;
+always @* begin
+    for (integer h = 0; h < 2; h++)
+        for (integer i = 0; i < 4; i++)
+            vd_dout[h*32 + 31 - i*8 -: 8] = vram[16'({vd_rd_addr, 3'b000} + h*4 + i)];
+end
+always @(posedge clk) begin
+    vd_rd_ack <= 0;
+    if (!nreset) begin
+        vd_accept <= 0; vd_wait_wr <= 0; vd_wait_rd <= 0;
+    end
+    else begin
+        if (!vd_req && !vd_wait_wr) vd_accept <= 0;
+        if (vd_wait_wr) begin
+            for (integer h = 0; h < 2; h++)
+                for (integer i = 0; i < 4; i++)
+                    if (vd_be[h*4 + 3 - i])
+                        vram[16'({vd_wr_addr, 3'b000} + h*4 + i)] <= vd_din[h*32 + 31 - i*8 -: 8];
+            vd_wr_addr <= vd_wr_addr + 1;
+            vd_wr_left <= vd_wr_left - 1;
+            if (vd_wr_left == 1) vd_wait_wr <= 0;
+        end
+        else if (vd_wait_rd) begin
+            if (vd_rd_delay != 0) vd_rd_delay <= vd_rd_delay - 1;
+            else begin
+                vd_rd_addr <= vd_rd_addr + 1;
+                vd_rd_left <= vd_rd_left - 1;
+                if (vd_rd_left == 1) vd_wait_rd <= 0;
+            end
+        end
+        else if (vd_req && !vd_accept) begin
+            vd_accept <= 1;
+            if (vd_we) begin
+                vd_wait_wr <= 1; vd_wr_addr <= 17'(vd_addr - TB_VRAM_BASE);
+                vd_wr_left <= vd_burstcnt;
+            end
+            else begin
+                vd_wait_rd <= 1; vd_rd_addr <= 17'(vd_addr - TB_VRAM_BASE);
+                vd_rd_left <= vd_burstcnt; vd_rd_delay <= ddr_rd_lat;
+                vd_rd_ack  <= 1;
+            end
+        end
+    end
+end
+
+integer line_t = 0, line_n = 0;
+reg     line_req = 0, line_swap = 0;
+reg [20:0] line_addr = 0;
+always @(posedge clk) begin
+    line_req <= 0; line_swap <= 0;
+    if (nreset) begin
+        line_t <= (line_t + 1 == line_clks) ? 0 : line_t + 1;
+        if (line_t == 0) begin
+            line_n <= (line_n + 1 == 525) ? 0 : line_n + 1;
+            if (line_n < 480) begin
+                line_req  <= 1;
+                line_addr <= 21'(line_n * vid_stride_bytes);
+            end
+        end
+        if (line_t == line_clks - 3) line_swap <= 1;
+    end
+end
+
+vram_ddr3 #(.DDR_VRAM_BASE(TB_VRAM_BASE), .VRAM_1MB(1)) vram_inst (
+    .clk_sys(clk), .reset(!nreset),
+    .mem_req(mem_req), .mem_is_vram(mem_memsel == 2), .mem_write(mem_write),
+    .mem_addr(mem_addr), .mem_be(mem_be), .mem_wdata(mem_wdata),
+    .mem_vram_wp(mem_vram_wp), .vram_ack(vram_ddr_ack_w), .vram_rdata(vram_ddr_q),
+    .vram_wq_room(vram_room),
+    .clk_vid(clk), .reset_vid(!nreset), .vid_col_word(10'd0),
+    .vid_stride(14'(vid_stride_bytes)), .vid_line_req(line_req),
+    .vid_line_addr(line_addr), .vid_line_swap(line_swap), .vid_rdata(),
+    .vram_ddr_req(vd_req), .vram_ddr_we(vd_we), .vram_ddr_addr(vd_addr),
+    .vram_ddr_burstcnt(vd_burstcnt), .vram_ddr_din(vd_din), .vram_ddr_be(vd_be),
+    .vram_ddr_busy(1'b0), .vram_ddr_ack(vd_wr_ack || vd_rd_ack),
+    .vram_ddr_dout(vd_dout), .vram_ddr_rvalid(vd_rvalid)
+);
+
+// profile counters: VRAM write-queue stalls and DDR3 occupancy
+integer vq_full = 0, vd_busy_rd = 0, vd_busy_wr = 0;
+always @(posedge clk) if (nreset) begin
+    if (!vram_room) vq_full++;
+    if (vd_wait_rd) vd_busy_rd++;
+    if (vd_wait_wr) vd_busy_wr++;
+end
+`else
 // Match production BRAM capture/deliver timing; storage omits stride compaction.
 always @(posedge clk) begin
     if (!nreset) vram_phase <= 0;
@@ -67,6 +188,7 @@ always @(posedge clk) begin
         for (integer i = 0; i < 4; i++)
             if (mem_be[3-i]) vram[{mem_addr[15:2],2'b00}+i] <= mem_wdata[31-i*8 -: 8];
 end
+`endif
 
 function automatic [31:0] read32(input bit is_rom, input integer a);
     if (is_rom) return {rom[a & 65535], rom[(a+1) & 65535],

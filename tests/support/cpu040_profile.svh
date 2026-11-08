@@ -82,6 +82,7 @@ task automatic run_profile;
     reg [30:0] mapped, rmw_mapped;
     integer backing_addr;
     integer first_beats [0:4], first_waits [0:4];
+    integer first_vq_full, first_vd_rd, first_vd_wr;
     pc = 0; emit32('h7000); emit32('h40800400);
     pc = 'h400;
     emit16('hF4D8); // CINVA BC
@@ -104,7 +105,13 @@ task automatic run_profile;
         end
         signatures = 0; transfers = 0; posts = 0;
         retain = 1; delay_cycles = run*3;
-        $display("PROFILE: 25 MHz, retained RAM/ROM, modeled RAM/ROM reply delay=%0d; production VRAM port timing", delay_cycles);
+        $display("PROFILE: %s, 25 MHz, retained RAM/ROM, modeled RAM/ROM reply delay=%0d; production VRAM port timing",
+`ifdef VRAM_DDR3
+                 $sformatf("DDR3 VRAM rd_lat=%0d line=%0d stride=%0d", ddr_rd_lat, line_clks, vid_stride_bytes),
+`else
+                 "BRAM VRAM",
+`endif
+                 delay_cycles);
         nreset = 1;
         wait (dut.memc_bank_mode[0]);
         @(negedge clk);
@@ -129,6 +136,9 @@ task automatic run_profile;
             profile_dc2_hold = 0; profile_wb_hold = 0;
             profile_active = 1;
             first_cycle = profile_cycles;
+`ifdef VRAM_DDR3
+            first_vq_full = vq_full; first_vd_rd = vd_busy_rd; first_vd_wr = vd_busy_wr;
+`endif
             for (integer b = 0; b < 5; b++) begin
                 first_beats[b] = profile_beats[b]; first_waits[b] = profile_waits[b];
             end
@@ -141,6 +151,10 @@ task automatic run_profile;
                      profile_beats[2]-first_beats[2], profile_beats[3]-first_beats[3], profile_beats[4]-first_beats[4],
                      profile_waits[0]-first_waits[0], profile_waits[1]-first_waits[1],
                      profile_waits[2]-first_waits[2], profile_waits[3]-first_waits[3], profile_waits[4]-first_waits[4]);
+`ifdef VRAM_DDR3
+            $display("PROFILE:   DDR3 VRAM: write queue full %0d clocks; DDR3 busy reading %0d, writing %0d",
+                     vq_full-first_vq_full, vd_busy_rd-first_vd_rd, vd_busy_wr-first_vd_wr);
+`endif
             engine_total = 0; biu_total = 0;
             $write("PROFILE:   DMU cycles:");
             foreach (profile_engine[state_name]) begin
