@@ -261,6 +261,36 @@ always @(posedge clk) begin
     end
 end
 
+// Device ordering behind posted VRAM stores: count the VRAM writes that
+// reach the port (direct pulses and adapter beats), and at each MEMCjr
+// holding-latch write (the marker) require exactly the stores the program
+// issued before it.  Marker 0 is the bank setup, before any VRAM store.
+// The CPU splits a misaligned store the 68040 way: the long at $F9009109
+// is byte+word+byte, three writes; the word at $F9009113 two; CAS one.
+// +VRAM_LOG lists every write.
+integer vram_writes = 0, vram_marker = 0;
+integer vram_marker_expect [0:2] = '{0, 35, 45};
+always @(posedge clk) begin
+    if (!nreset) begin
+        vram_writes <= 0; vram_marker <= 0;
+    end
+    else begin
+        if (mem_vram_wp || (mem_req && mem_memsel == 2 && mem_write && mem_ack)) begin
+            vram_writes <= vram_writes + 1;
+            if ($test$plusargs("VRAM_LOG"))
+                $display("VRAM write %0d: %h be=%b data=%h %s", vram_writes,
+                         {mem_addr, 2'b00}, mem_be, mem_wdata, mem_vram_wp ? "direct" : "beat");
+        end
+        if (dut.bus_req && dut.bus_ack && dut.bus_write && dut.bus_addr == 'h5000E07C &&
+            !$test$plusargs("PROFILE")) begin
+            if (vram_marker > 2 || vram_writes != vram_marker_expect[vram_marker])
+                $fatal(1, "Device write %0d passed VRAM stores: %0d written, %0d expected",
+                       vram_marker, vram_writes, vram_marker > 2 ? -1 : vram_marker_expect[vram_marker]);
+            vram_marker <= vram_marker + 1;
+        end
+    end
+end
+
 task automatic emit16(input [15:0] v);
     rom[pc] = v[15:8]; rom[pc+1] = v[7:0]; pc += 2;
 endtask
@@ -312,6 +342,46 @@ initial begin
     check_read('h2000, 'hCAFEBABE);
     store('h2000, 'hDEADBEEF);
     check_read('h2000, 'hDEADBEEF);
+
+    // Posted VRAM stores (AP040_VRAM_POST), after the Quadra 800's adapter
+    // cases.  A MEMCjr holding-latch write ($5000E07C, the value it already
+    // has) is the device marker: every VRAM write before it must have
+    // reached the VRAM port by then (vram_marker_expect, checked below).
+    emit16('h41F9); emit32('hF9009000);       // LEA $F9009000,A0
+    emit16('h323C); emit16(31);               // MOVE.W #31,D1
+    emit16('h203C); emit32('h10203040);       // MOVE.L #$10203040,D0
+    emit16('h20C0);                           // MOVE.L D0,(A0)+
+    emit16('h5280);                           // ADDQ.L #1,D0
+    emit16('h51C9); emit16(16'hFFFA);         // DBF D1,*-4
+    check_read('hF9009000, 'h10203040);
+    check_read('hF9009040, 'h10203050);
+    check_read('hF900907C, 'h1020305F);
+    // byte and word stores merging into a posted longword, then a device
+    store('hF9009100, 'h11223344);
+    emit16('h13FC); emit16('h00AA); emit32('hF9009101); // MOVE.B #$AA,abs
+    emit16('h33FC); emit16('hBBCC); emit32('hF9009102); // MOVE.W #$BBCC,abs
+    store('h5000E07C, 'h10);                  // marker 1: 32 + 3 stores
+    check_read('hF9009100, 'h11AABBCC);
+    // a locked RMW behind an ordinary queued store
+    store('hF9009100, 'h12345678);
+    emit16('h41F9); emit32('hF9009100);       // LEA $F9009100,A0
+    emit16('h203C); emit32('h12345678);       // MOVE.L #$12345678,D0
+    emit16('h223C); emit32('h89ABCDEF);       // MOVE.L #$89ABCDEF,D1
+    emit16('h0ED0); emit16('h0040);           // CAS.L D0,D1,(A0)
+    check_read('hF9009100, 'h89ABCDEF);
+    // stores crossing a longword keep the precise path (split into beats)
+    store('hF9009110, 0);
+    store('hF9009114, 0);
+    store('hF9009109, 'hCAFEBABE);
+    check_read('hF9009109, 'hCAFEBABE);
+    emit16('h33FC); emit16('h4321); emit32('hF9009113); // MOVE.W #$4321,abs
+    check_read('hF9009110, 'h00000043);
+    check_read('hF9009114, 'h21000000);
+    // cache maintenance right after a posted store, then a device
+    store('hF9009100, 'h55667788);
+    emit16('hF478);                           // CPUSHA DC
+    store('h5000E07C, 'h10);                  // marker 2
+    check_read('hF9009100, 'h55667788);
     wait_pc = 'h40800000 + pc;
     emit16('h4E72); emit16('h2000); // STOP, allow interrupts
     check_read('h2100, 'h12345678);
@@ -347,6 +417,8 @@ initial begin
         repeat (40) @(negedge clk);
         if (signatures != expected_count || irq_reads != 1)
             $fatal(1, "Interrupt/RTE execution incomplete");
+        if (vram_marker != 3)
+            $fatal(1, "Saw %0d of 3 device markers", vram_marker);
         if (run == 0) plain_transfers = transfers;
         else if (transfers >= plain_transfers)
             $fatal(1, "Retained lines did not reduce platform reads");

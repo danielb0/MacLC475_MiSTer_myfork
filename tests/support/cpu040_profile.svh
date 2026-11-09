@@ -1,5 +1,5 @@
 // Included by tb_cpu040_machine. Synthetic workloads, not Speedometer scores.
-localparam PROFILE_CASES = 7;
+localparam PROFILE_CASES = 8;
 string profile_name [0:PROFILE_CASES-1];
 reg [31:0] profile_start [0:PROFILE_CASES-1], profile_end [0:PROFILE_CASES-1];
 integer profile_cycles = 0;
@@ -31,10 +31,30 @@ always @(posedge clk) begin : profile_count
     end
 end
 
+// +TRACE_VRAM_RD: one line per clock through a few masked updates (case 7)
+integer trace_left = 0;
+always @(posedge clk) begin
+    if ($test$plusargs("TRACE_VRAM_RD") && profile_active && profile_name[7] != "" &&
+        dut.cpu_instruction_pc >= profile_start[7] - 12 && dut.cpu_instruction_pc <= profile_end[7] &&
+        trace_left < 120) begin
+        trace_left++;
+        $display("TRACE %0d pc=%h e=%s biu=%s ts=%b ta=%b breq=%b back=%b bw=%b ba=%h svc=%0d mreq=%b mack=%b vwp=%b",
+                 profile_cycles, dut.cpu_instruction_pc, dut.cpu.cpu.dmu.e_st.name(),
+                 dut.cpu.cpu.biu.st.name(), dut.cpu.c_ts_n, dut.cpu.c_ta_n,
+                 dut.bus_req, dut.bus_ack, dut.bus_write, dut.bus_addr, dut.svc,
+                 mem_req, mem_ack, mem_vram_wp);
+    end
+end
+
 task automatic profile_loop(input integer which);
     integer loop_pc;
     emit16('h207C); emit32(which < 3 ? (which == 2 ? 'h4000 : 'h2000) :
-                          (which == 5 ? 'hF9002000 : which == 4 ? 'hF9001000 : 'hF9000000)); // MOVEA.L #a,A0
+                          (which == 7 ? 'hF9004000 :
+                           which == 5 ? 'hF9002000 : which == 4 ? 'hF9001000 : 'hF9000000)); // MOVEA.L #a,A0
+    if (which == 7) begin
+        emit16('h243C); emit32('hFFFF0000); // MOVE.L #mask,D2
+        emit16('h263C); emit32('h0000ABCD); // MOVE.L #pattern,D3
+    end
     emit16('h227C); emit32('hF9003000); // MOVEA.L #a,A1
     emit16('h7000); // MOVEQ #0,D0
     emit16('h323C); emit16(255); // MOVE.W #255,D1
@@ -63,6 +83,14 @@ task automatic profile_loop(input integer which);
             profile_name[which] = "VRAM sequential copy";
             emit16('h22D8); // MOVE.L (A0)+,(A1)+
         end
+        7: begin
+            // QuickDraw-shaped: a masked pixel update along a row
+            profile_name[which] = "VRAM masked read/modify/write";
+            emit16('h2010); // MOVE.L (A0),D0
+            emit16('hC082); // AND.L D2,D0
+            emit16('h8083); // OR.L D3,D0
+            emit16('h20C0); // MOVE.L D0,(A0)+
+        end
     endcase
     profile_start[which] = 'h40800000 + pc;
     emit16('h51C9); emit16(16'(loop_pc - pc)); // DBRA D1,loop
@@ -74,6 +102,7 @@ task automatic profile_loop(input integer which);
         1,4,5: expected[which] = 256;
         2,3: expected[which] = 'h12345678;
         6: expected[which] = 0;
+        7: expected[which] = 'h0000ABCD;
     endcase
 endtask
 
@@ -185,9 +214,9 @@ task automatic run_profile;
         end
         wait (dut.cpu_instruction_pc == done_pc);
         repeat (40) @(negedge clk);
-        // three VRAM-writing loops (cases 4-6), 256 stores each
-        if (profile_beats[4] - run_vram_w != 768)
-            $fatal(1, "Profile VRAM write beats %0d, expected 768", profile_beats[4] - run_vram_w);
+        // four VRAM-writing loops (cases 4-7), 256 stores each
+        if (profile_beats[4] - run_vram_w != 1024)
+            $fatal(1, "Profile VRAM write beats %0d, expected 1024", profile_beats[4] - run_vram_w);
         if (signatures != expected_count || overlay || dut.cpu.cpu.cacr != 'h80008000)
             $fatal(1, "Profile completion/cache checks failed");
         for (integer i = 0; i < 256; i++) begin
@@ -195,9 +224,11 @@ task automatic run_profile;
                 $fatal(1, "VRAM write result %0d", i);
             if ({vram['h3000+i*4], vram['h3001+i*4], vram['h3002+i*4], vram['h3003+i*4]} !== 32'h12345678)
                 $fatal(1, "VRAM copy result %0d", i);
+            if ({vram['h4000+i*4], vram['h4001+i*4], vram['h4002+i*4], vram['h4003+i*4]} !== 32'h0000ABCD)
+                $fatal(1, "VRAM masked update result %0d", i);
         end
         if ({vram['h2000], vram['h2001], vram['h2002], vram['h2003]} !== 32'd256)
             $fatal(1, "VRAM read/modify/write result");
-        $display("PASS: CPU040 cycle profile run %0d: seven workload signatures and VRAM contents", run);
+        $display("PASS: CPU040 cycle profile run %0d: eight workload signatures and VRAM contents", run);
     end
 endtask
