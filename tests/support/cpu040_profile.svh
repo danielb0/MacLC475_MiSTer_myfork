@@ -83,6 +83,7 @@ task automatic run_profile;
     integer backing_addr;
     integer first_beats [0:4], first_waits [0:4];
     integer first_vq_full, first_vd_rd, first_vd_wr;
+    integer run_vram_w;
     pc = 0; emit32('h7000); emit32('h40800400);
     pc = 'h400;
     emit16('hF4D8); // CINVA BC
@@ -112,6 +113,7 @@ task automatic run_profile;
                  "BRAM VRAM",
 `endif
                  delay_cycles);
+        run_vram_w = profile_beats[4];
         nreset = 1;
         wait (dut.memc_bank_mode[0]);
         @(negedge clk);
@@ -171,13 +173,21 @@ task automatic run_profile;
             if (engine_total != profile_cycles-first_cycle || biu_total != engine_total)
                 $fatal(1, "Profile state census does not cover the measured interval");
             if (k >= 3) begin
+                // a posted store (AP040_VRAM_POST) from the untimed first
+                // iteration can reach the bus inside the window: one extra
+                // write beat; the run's exact total is checked at the end
                 if (profile_beats[3]-first_beats[3] != (k == 4 ? 0 : 255) ||
-                    profile_beats[4]-first_beats[4] != (k == 3 ? 0 : 255))
+                    (k == 3 ? profile_beats[4]-first_beats[4] != 0 :
+                     (profile_beats[4]-first_beats[4] < 255 ||
+                      profile_beats[4]-first_beats[4] > 256)))
                     $fatal(1, "Profile VRAM workload lost or duplicated a bus beat");
             end
         end
         wait (dut.cpu_instruction_pc == done_pc);
         repeat (40) @(negedge clk);
+        // three VRAM-writing loops (cases 4-6), 256 stores each
+        if (profile_beats[4] - run_vram_w != 768)
+            $fatal(1, "Profile VRAM write beats %0d, expected 768", profile_beats[4] - run_vram_w);
         if (signatures != expected_count || overlay || dut.cpu.cpu.cacr != 'h80008000)
             $fatal(1, "Profile completion/cache checks failed");
         for (integer i = 0; i < 256; i++) begin
