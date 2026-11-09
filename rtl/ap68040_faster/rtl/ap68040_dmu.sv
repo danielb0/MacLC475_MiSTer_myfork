@@ -2104,7 +2104,37 @@ always_ff @(posedge clk) begin
 					if (!bo.rd) bo_wd <= bo_wd << (8 * bo_pn);
 					bo_pa   <= bo_pa + {29'd0, bo_pn};
 					bo_left <= bo_left - bo_pn;
-					if (bo_left == bo_pn) e_st <= e_ret;
+					if (bo_left == bo_pn && bo.rd && e_ret == E_S_BUSD &&
+					    m2.r.ack == 2'd0 && m2.r.msz != SZ_Q && !m2.split &&
+					    !(pbe_r && pv_for == 2'd0)) begin
+						// a plain single-part read (the uncached VRAM and
+						// device case) answers DC2 at its last piece's TA
+						// (the data comes with done) instead of through
+						// E_S_BUSD, E_S_NEXT and E_S_DONE: 3 clocks less a
+						// load.  A push's TEA (pbe_r) still takes E_S_DONE.
+						logic [31:0] rd_fin;
+						rd_fin = (bo_rd << (8 * bo_pn)) |
+						         grab(b_rdata, bo_pn, bo_pa[1:0]);
+						bo_rd      <= rd_fin;
+						e_acc      <= (e_acc << (8 * e_n)) | rd_fin;
+						e_ldata    <= (e_acc << (8 * e_n)) | rd_fin;
+						m2.x       <= e_x;
+						e_job      <= 1'b0;
+						e_dc2_done <= !e_kill;
+						steal      <= 1'b0;
+						e_st       <= E_IDLE;
+						// synthesis translate_off
+						if (!e_kill && !m2.r.v) begin
+							$display("FAIL: DMU: a discarded job completed without its kill mark");
+							sim_kchk <= 1'b1;
+						end
+						if (!b_rvalid) begin
+							$display("FAIL: DMU: a read piece done without its data");
+							sim_kchk <= 1'b1;
+						end
+						// synthesis translate_on
+					end
+					else if (bo_left == bo_pn) e_st <= e_ret;
 					else e_breq <= 1'b1;
 				end
 			end
