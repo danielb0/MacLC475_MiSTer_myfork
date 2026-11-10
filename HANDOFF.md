@@ -1,5 +1,19 @@
 # Project handoff
 
+## Public README cleanup
+
+- Objective: provide concise repository setup and status information for
+  prospective users; make clear that ROM and CUDA firmware are user-supplied.
+- Baseline: `exp/lean-ddr3-vram`, README described internal build/test details
+  and did not clearly state that ROM and firmware are not included.
+- Changes: `README.md` now gives build/setup steps, the Macintosh ROM checksum
+  (`FF7439EE`) and expected path, CUDA firmware filename, and brief status.
+- Checks: reviewed the README diff against `docs/CURRENT_DIRECTION.md` and
+  `docs/RELEASE_READINESS.md`; no tests run (documentation-only change).
+- Unresolved: alternate ROM dump names are descriptive examples, not verified
+  canonical filenames. Exact next step: none unless canonical filenames or a
+  different user setup flow are provided.
+
 ## Hardware coverage and Apple IIe feasibility review
 
 - Objective: assess full machine coverage, SWIM II/PrimeTime completeness,
