@@ -344,8 +344,9 @@ wire hit_way_2 = (&rd_cache_val_2[cur_rd_half +: 4]) && (rd_cache_tag_2 == cur_r
 wire hit_way_3 = (&rd_cache_val_3[cur_rd_half +: 4]) && (rd_cache_tag_3 == cur_rd_tag);
 
 // A hit needs no FIFO-conflict check: a byte with a write still queued is
-// never valid -- the write clears it, and a fill is only issued once the
-// FIFO holds nothing for the line (line_conflict below).
+// either invalid or already holds that write's data (the write updates the
+// held line), and a fill is only issued once the FIFO holds nothing for the
+// line (line_conflict below).
 wire rd_cache_hit = hit_way_0 || hit_way_1 || hit_way_2 || hit_way_3;
 
 // A fill is issued only when the FIFO holds no write for the 32-byte line
@@ -382,6 +383,13 @@ wire [14:0] fill_tag     = (rd_victim == 2'd0) ? rd_cache_tag_0 :
 wire [7:0] wr_now_be  = cpu_vram_write ? cpu_w64_be : 8'h00;
 wire [7:0] fill_val_0 = ~((cur_rd_beat == 2'd0) ? wr_now_be : 8'h00) & ~fill_wr_mask[7:0];
 wire [7:0] fill_val_b = ~((cur_rd_beat == rd_burst_beat) ? wr_now_be : 8'h00) & ~fill_wr_mask[{rd_burst_beat, 3'b000} +: 8];
+
+// a CPU write merged into a held cache beat
+function [63:0] wr_merge(input [63:0] old);
+	integer b;
+	for (b = 0; b < 8; b = b + 1)
+		wr_merge[b*8 +: 8] = cpu_w64_be[b] ? cpu_w64_din[b*8 +: 8] : old[b*8 +: 8];
+endfunction
 
 wire [63:0] hit_data = hit_way_0 ? rd_cache_line_0[cur_rd_beat] :
                        hit_way_1 ? rd_cache_line_1[cur_rd_beat] :
@@ -488,15 +496,50 @@ always @(posedge clk_sys) begin
 			vram_wr_ph <= 1'b0;
 		end
 
-		// A CPU write invalidates just the bytes it wrote in a held line, and
-		// keeps them out of the fill in flight (see fill_wr_mask)
+		// A CPU write updates the bytes it wrote in a held line and marks them
+		// valid, so QuickDraw's read-modify-write of one longword hits on the
+		// re-read instead of draining the write FIFO and refetching the line.
+		// The cache then holds data newer than the DDR3 until the FIFO
+		// drains, which is fine: a fill is only issued for a line with no
+		// write queued (line_conflict).  The one exception is the way being
+		// filled: its fill beats overwrite whole beats with data that may
+		// predate the write, so there the bytes are only invalidated and
+		// kept out of the fill (fill_wr_mask).
 		if (cpu_vram_write) begin
 			if (fill_active && (cur_rd_tag == fill_tag))
 				fill_wr_mask[{cur_rd_beat, 3'b000} +: 8] <= fill_wr_mask[{cur_rd_beat, 3'b000} +: 8] | cpu_w64_be;
-			if (cur_rd_tag == rd_cache_tag_0) rd_cache_val_0[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_0[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
-			if (cur_rd_tag == rd_cache_tag_1) rd_cache_val_1[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_1[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
-			if (cur_rd_tag == rd_cache_tag_2) rd_cache_val_2[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_2[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
-			if (cur_rd_tag == rd_cache_tag_3) rd_cache_val_3[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_3[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
+			if (cur_rd_tag == rd_cache_tag_0) begin
+				if (fill_active && rd_victim == 2'd0)
+					rd_cache_val_0[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_0[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
+				else begin
+					rd_cache_line_0[cur_rd_beat] <= wr_merge(rd_cache_line_0[cur_rd_beat]);
+					rd_cache_val_0[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_0[{cur_rd_beat, 3'b000} +: 8] | cpu_w64_be;
+				end
+			end
+			if (cur_rd_tag == rd_cache_tag_1) begin
+				if (fill_active && rd_victim == 2'd1)
+					rd_cache_val_1[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_1[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
+				else begin
+					rd_cache_line_1[cur_rd_beat] <= wr_merge(rd_cache_line_1[cur_rd_beat]);
+					rd_cache_val_1[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_1[{cur_rd_beat, 3'b000} +: 8] | cpu_w64_be;
+				end
+			end
+			if (cur_rd_tag == rd_cache_tag_2) begin
+				if (fill_active && rd_victim == 2'd2)
+					rd_cache_val_2[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_2[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
+				else begin
+					rd_cache_line_2[cur_rd_beat] <= wr_merge(rd_cache_line_2[cur_rd_beat]);
+					rd_cache_val_2[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_2[{cur_rd_beat, 3'b000} +: 8] | cpu_w64_be;
+				end
+			end
+			if (cur_rd_tag == rd_cache_tag_3) begin
+				if (fill_active && rd_victim == 2'd3)
+					rd_cache_val_3[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_3[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
+				else begin
+					rd_cache_line_3[cur_rd_beat] <= wr_merge(rd_cache_line_3[cur_rd_beat]);
+					rd_cache_val_3[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_3[{cur_rd_beat, 3'b000} +: 8] | cpu_w64_be;
+				end
+			end
 		end
 
 		// DMA trigger: a line request starts the prefetch (32-beat bursts),
@@ -546,8 +589,10 @@ always @(posedge clk_sys) begin
 				vram_ddr_burstcnt <= 8'd32;
 				state             <= S_DMA_BURST;
 			end
-			// 1. CPU Read (burst of 4 beats = 32 bytes into 4-way line cache)
-			else if (cpu_rd_pend && !fifo_conflict) begin
+			// 1. CPU Read (burst of 4 beats = 32 bytes into 4-way line cache).
+			// Not on a write's clock: that write is not in the FIFO yet, so
+			// line_conflict cannot see it, and the fill would predate it.
+			else if (cpu_rd_pend && !fifo_conflict && !cpu_vram_write) begin
 				vram_ddr_req      <= 1'b1;
 				vram_ddr_we       <= 1'b0;
 				vram_ddr_addr     <= DDR_VRAM_BASE + {12'd0, cur_rd_tag, 2'b00};
