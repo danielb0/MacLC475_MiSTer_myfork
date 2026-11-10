@@ -593,6 +593,10 @@ wire [20:0] vid_line_addr;
 wire        vid_line_swap;
 wire        vram_wq_room;
 wire [11:0] vram_perf_ev;                  // rtl/perf_counters.sv pages 5-6
+wire [31:2] vram_fast_addr;                // vram_ddr3's fast read-hit port
+wire        vram_fast_take;
+wire        vram_fast_hit;
+wire [31:0] vram_fast_data;
 
 wire [255:0] m_debug_status;
 wire [127:0] m_debug_status2;
@@ -692,6 +696,10 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.mem_wq_room(sdr_wq_room),
 	.mem_vram_wq_room(vram_wq_room),
 	.mem_vram_wp(mem_vram_wp),
+	.mem_vram_fast_addr(vram_fast_addr),
+	.mem_vram_fast_take(vram_fast_take),
+	.mem_vram_fast_hit(vram_fast_hit),
+	.mem_vram_fast_data(vram_fast_data),
 	.mem_line_valid(sdr_line_valid),
 	.mem_line_tag(sdr_line_tag),
 	.mem_line_data(sdr_line_data),
@@ -1200,6 +1208,8 @@ end
 
 assign vram_wq_room      = 1'b1;
 assign vram_perf_ev      = 12'd0;
+assign vram_fast_hit     = 1'b0;
+assign vram_fast_data    = 32'd0;
 assign vram_ddr_req      = 1'b0;
 assign vram_ddr_we       = 1'b0;
 assign vram_ddr_addr     = 29'd0;
@@ -1235,6 +1245,10 @@ vram_ddr3 #(
 	.vram_ack(vram_ack),
 	.vram_rdata(vram_qa),
 	.vram_wq_room(vram_wq_room),
+	.fast_addr(vram_fast_addr),
+	.fast_take(vram_fast_take),
+	.fast_hit(vram_fast_hit),
+	.fast_data(vram_fast_data),
 	.perf_ev(vram_perf_ev),
 
 	.clk_vid(clk_vid),

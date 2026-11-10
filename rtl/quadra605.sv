@@ -77,6 +77,12 @@ module quadra605
 	// a VRAM write straight into the VRAM block RAM at mem_addr/be/wdata,
 	// with mem_req low (2026-09-26)
 	output reg        mem_vram_wp,
+	// a VRAM read answered from vram_ddr3's line cache in the request's own
+	// clock (bus_vram_fast below); tie mem_vram_fast_hit low without one
+	output     [31:2] mem_vram_fast_addr,
+	output            mem_vram_fast_take,
+	input             mem_vram_fast_hit,
+	input      [31:0] mem_vram_fast_data,
 	input             mem_line_valid,
 	input      [26:4] mem_line_tag,
 	input     [127:0] mem_line_data,
@@ -805,6 +811,15 @@ wire bus_vram_rd = (svc == S_IDLE) && !walker_pend && !cpu_berr &&
 	               !bus_ack_adapter && bus_req && !bus_write && !bus_wr_span &&
 	               (decode(bus_addr[31:2]) == 3'd2);
 
+// A VRAM read that hits vram_ddr3's line cache is acknowledged like a
+// retained RAM line: looked up from bus_addr, acknowledge registered in
+// the request's own clock, no mem_req.  Two clocks a read instead of the
+// four through S_MEM (mem_req, vram_ack, bus_miss_ack registered in turn).
+assign mem_vram_fast_addr = bus_addr[31:2];
+wire        bus_vram_fast = bus_vram_rd && mem_vram_fast_hit;
+assign mem_vram_fast_take = bus_vram_fast;
+wire [31:0] bus_vram_fast_data = (mem_vram_fast_data << {bus_addr[1:0], 3'd0}) >> {3'd4 - bus_wr_bytes, 3'd0};
+
 assign bus_req_adapter = bus_req && !bus_line_match && !bus_line_wait && !bus_wr_direct && !bus_vram_direct && !bus_vram_rd &&
 	                     !bus_rom_match && !bus_rom_first && !wr_split_pend &&
 	                     !bus_first_miss && !svc_bus_direct && !bus_miss_ack &&
@@ -817,9 +832,10 @@ always @(posedge clk) begin
 	end
 	else if (ce) begin
 		bus_line_ack <= 0;
-		if (!bus_line_ack && (bus_line_match || bus_rom_match)) begin
+		if (!bus_line_ack && (bus_line_match || bus_rom_match || bus_vram_fast)) begin
 			bus_line_ack   <= 1;
-			bus_line_rdata <= bus_rom_match ? bus_rom_data : bus_line_data;
+			bus_line_rdata <= bus_vram_fast ? bus_vram_fast_data :
+			                  bus_rom_match ? bus_rom_data : bus_line_data;
 		end
 	end
 end
@@ -957,7 +973,10 @@ always @(posedge clk) begin
 				reg [31:2] a;
 				reg        wr;
 				dma_turn <= 1;
-				if (bus_first_miss || bus_vram_rd || bus_rom_first) begin
+				if (bus_vram_fast) begin
+					// answered by the line acknowledge above; nothing to launch
+				end
+				else if (bus_first_miss || bus_vram_rd || bus_rom_first) begin
 					svc_walker     <= 0;
 					svc_bus_direct <= 1;
 					svc_addr       <= bus_addr[31:2];

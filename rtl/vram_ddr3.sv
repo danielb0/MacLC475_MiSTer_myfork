@@ -28,6 +28,12 @@ module vram_ddr3 #(
 	output reg        vram_ack,
 	output reg [31:0] vram_rdata,
 	output            vram_wq_room,    // write queue has room
+	// second lookup port into the read line cache, from the CPU bus address
+	// before the machine has registered a request (see fast_hit below)
+	input      [31:2] fast_addr,
+	input             fast_take,       // the machine answers from fast_data
+	output            fast_hit,
+	output     [31:0] fast_data,
 	// one-clock event strobes for rtl/perf_counters.sv pages 5-6
 	output     [11:0] perf_ev,
 
@@ -399,6 +405,28 @@ wire [63:0] hit_data = hit_way_0 ? rd_cache_line_0[cur_rd_beat] :
                                    rd_cache_line_3[cur_rd_beat];
 wire [31:0] hit_word = mem_addr[2] ? hit_data[63:32] : hit_data[31:0];
 
+// The fast port: the same lookup on the CPU's bus address, combinational,
+// so the machine can register its acknowledge in the clock the request
+// appears.  The rules are those of a hit above; a read that misses here
+// comes back as mem_req.  Not on a write's clock: the write is older than
+// the read in bus order and lands in the line at the clock edge.
+wire [14:0] fast_tag  = fast_addr[19:5];
+wire  [1:0] fast_beat = fast_addr[4:3];
+wire  [4:0] fast_half = {fast_beat, fast_addr[2], 2'b00};
+
+wire fast_way_0 = (&rd_cache_val_0[fast_half +: 4]) && (rd_cache_tag_0 == fast_tag);
+wire fast_way_1 = (&rd_cache_val_1[fast_half +: 4]) && (rd_cache_tag_1 == fast_tag);
+wire fast_way_2 = (&rd_cache_val_2[fast_half +: 4]) && (rd_cache_tag_2 == fast_tag);
+wire fast_way_3 = (&rd_cache_val_3[fast_half +: 4]) && (rd_cache_tag_3 == fast_tag);
+
+wire [63:0] fast_beat_data = fast_way_0 ? rd_cache_line_0[fast_beat] :
+                             fast_way_1 ? rd_cache_line_1[fast_beat] :
+                             fast_way_2 ? rd_cache_line_2[fast_beat] :
+                                          rd_cache_line_3[fast_beat];
+assign fast_hit  = (fast_way_0 || fast_way_1 || fast_way_2 || fast_way_3) &&
+                   !cpu_vram_write;
+assign fast_data = fast_addr[2] ? fast_beat_data[63:32] : fast_beat_data[31:0];
+
 // DDR3 Request & Arbitration FSM States
 localparam S_IDLE      = 3'd0;
 localparam S_CPU_READ  = 3'd1;
@@ -729,9 +757,9 @@ always @(posedge clk_sys) begin
 end
 
 // ---- perf events (pages 5 and 6 of rtl/perf_counters.sv) ----
-// a read answered from the line cache
-wire pe_hit  = mem_req && mem_is_vram && !mem_write && !vram_ack &&
-               rd_cache_hit;
+// a read answered from the line cache, through either port
+wire pe_hit  = (mem_req && mem_is_vram && !mem_write && !vram_ack &&
+                rd_cache_hit) || fast_take;
 // a line fill issued for a pending read (S_IDLE branch 1)
 wire pe_fill = !reset && (state == S_IDLE) &&
                !(dma_late && (dma_state == DMA_BURST_REQ) && !dma_take) &&
