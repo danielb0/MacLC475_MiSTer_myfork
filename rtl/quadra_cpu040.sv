@@ -68,7 +68,13 @@ module quadra_cpu040
 	output [255:0] debug_status,
 	output [127:0] debug_status2,
 	output [63:0] debug_test_status,
-	output [31:0] debug_instruction_pc
+	output [31:0] debug_instruction_pc,
+
+	// perf counters (rtl/perf_counters.sv), shown by the DAFB overlay
+	input         perf_clear,
+	input         perf_freeze,
+	input   [2:0] perf_page,
+	output [223:0] perf_rows
 );
 
 wire [31:0] c_a, c_do;
@@ -78,6 +84,8 @@ wire  [2:0] c_tm;
 wire [31:0] dbg_pc;
 wire        dbg_halted;
 wire        dbg_retire;
+wire [63:0] dbg_pev;
+wire  [5:0] dbg_perf;
 wire [31:0] c_di;
 wire        c_ta_n, c_tea_n, c_tci_n, c_avec_n;
 wire        c_lock_n;
@@ -113,7 +121,8 @@ ap68040 #(
 	.a_i(32'd0), .ts_n_i(1'b1), .rw_n_i(1'b1), .siz_i(2'd0), .tt_i(2'd0), .sc(2'b00),
 	.mi_n(c_mi_n), .ta_n_o(), .ta_oe(),
 	.rsto_n(c_rsto_n), .cdis_n(1'b1), .mdis_n(1'b1), .pst(),
-	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_halted(dbg_halted)
+	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_halted(dbg_halted),
+	.dbg_pev(dbg_pev), .dbg_perf(dbg_perf)
 );
 
 quadra_bus040 bus_adapter (
@@ -161,6 +170,16 @@ end endgenerate
 //----------------------------------------------------------------------------
 // the rest of wombat_cpu's ports
 //----------------------------------------------------------------------------
+perf_counters perf (
+	.clk(clk), .clear(perf_clear), .freeze(perf_freeze), .page(perf_page),
+	.retire(dbg_pev[56]), .retire2(dbg_pev[57]), .core(dbg_perf),
+	.c_req(cpu_bus_req), .c_ack(cpu_bus_ack), .c_write(cpu_bus_write),
+	.c_instr(cpu_bus_instr), .c_addr(cpu_bus_addr),
+	.m_req(bus_req), .m_ack(bus_ack),
+	.row1(perf_rows[223:160]), .row2(perf_rows[159:128]),
+	.row3(perf_rows[127:64]), .row4(perf_rows[63:0])
+);
+
 assign walker_req     = 1'b0;
 assign walker_we      = 1'b0;
 assign walker_addr    = 32'd0;

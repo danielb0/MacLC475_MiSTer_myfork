@@ -31,6 +31,29 @@ always @(posedge clk) begin : profile_count
     end
 end
 
+// The hardware perf counters (rtl/perf_counters.sv) count from time zero and
+// are never cleared here; check them against this file's own counts.
+task automatic perf_check;
+    integer m_req, m_wait;
+    for (integer p = 0; p < 5; p++)
+        $display("PROFILE: perf page %0d: %0d %0d %0d %0d %0d %0d", p,
+                 dut.cpu.perf.cnt[p*6], dut.cpu.perf.cnt[p*6+1], dut.cpu.perf.cnt[p*6+2],
+                 dut.cpu.perf.cnt[p*6+3], dut.cpu.perf.cnt[p*6+4], dut.cpu.perf.cnt[p*6+5]);
+    m_req = 0; m_wait = 0;
+    for (integer i = 0; i < 5; i++) begin
+        m_req += profile_beats[i] + profile_waits[i];
+        m_wait += profile_waits[i];
+    end
+    if (dut.cpu.perf.cnt[0] < profile_cycles || dut.cpu.perf.cnt[28] != m_req ||
+        dut.cpu.perf.cnt[29] != m_wait || dut.cpu.perf.cnt[24] != profile_beats[3] ||
+        dut.cpu.perf.cnt[26] != profile_beats[4])
+        $fatal(1, "Perf counters disagree: cycles %0d/%0d, bus %0d/%0d, waits %0d/%0d, VRAM-R %0d/%0d, VRAM-W %0d/%0d",
+               dut.cpu.perf.cnt[0], profile_cycles, dut.cpu.perf.cnt[28], m_req,
+               dut.cpu.perf.cnt[29], m_wait, dut.cpu.perf.cnt[24], profile_beats[3],
+               dut.cpu.perf.cnt[26], profile_beats[4]);
+    $display("PASS: perf counters agree with the profile's bus counts");
+endtask
+
 // +TRACE_VRAM_RD: one line per clock through a few masked updates (case 7)
 integer trace_left = 0;
 always @(posedge clk) begin
@@ -230,5 +253,6 @@ task automatic run_profile;
         if ({vram['h2000], vram['h2001], vram['h2002], vram['h2003]} !== 32'd256)
             $fatal(1, "VRAM read/modify/write result");
         $display("PASS: CPU040 cycle profile run %0d: eight workload signatures and VRAM contents", run);
+        perf_check();
     end
 endtask

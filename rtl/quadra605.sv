@@ -155,6 +155,11 @@ module quadra605
 	output        debug_halted,
 	input         video_diagnostic,
 	input         adb_diagnostic,
+	// perf counters: perf_show replaces the overlay's rows with perf_page
+	input         perf_show,
+	input   [2:0] perf_page,
+	input         perf_clear,
+	input         perf_freeze,
 	input  [15:0] video_platform_status,
 
 	// built-in Ethernet: the OSD switch (latched under reset by the top) and the
@@ -324,6 +329,7 @@ startup_probe startup (
 	.pc(cpu_instruction_pc), .ir(debug_status[63:48]),
 	.test_status(cpu_test_status), .error_status(startup_error_status), .flags(startup_flags)
 );
+wire [223:0] perf_rows;
 `ifdef CPU_AP68040
 quadra_cpu040 #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 `else
@@ -374,7 +380,9 @@ wombat_cpu #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 	.debug_status(debug_status),
 	.debug_status2(debug_status2),
 	.debug_test_status(cpu_test_status),
-	.debug_instruction_pc(cpu_instruction_pc)
+	.debug_instruction_pc(cpu_instruction_pc),
+	.perf_clear(perf_clear), .perf_freeze(perf_freeze), .perf_page(perf_page),
+	.perf_rows(perf_rows)
 );
 
 `ifdef CPU_AP68040
@@ -558,21 +566,26 @@ memcjr #(.CLK_HZ(CLK_HZ)) memc (
 	.bank_mode(memc_bank_mode), .memory_top(memc_memory_top)
 );
 
+// The overlay's four rows: the machine's diagnostics, or a perf counter page.
+wire [31:0] diag_platform = {video_platform_status, 8'h61, startup_flags};
+`ifdef SWIM2
+wire [63:0] diag_test  = adb_diagnostic ? debug_adb_mouse : last_io_read;
+wire [63:0] diag_error = adb_diagnostic ? debug_adb_host : last_io_write;
+`else
+wire [63:0] diag_test  = adb_diagnostic ? debug_adb_mouse : cpu_test_status;
+wire [63:0] diag_error = adb_diagnostic ? debug_adb_host : startup_error_status;
+`endif
+wire [63:0] diag_status = {debug_status[31:0], debug_status[63:48], debug_status[231:224],
+                           debug_halted, debug_fault, cpu_stall_flt, overlay, video_milestones};
 dafb dafb (
 	.clk_vid(clk_vid),
 	.nreset_vid(nreset_vid),
 	.mon_sel(mon_sel),
-	.diagnostic(video_diagnostic),
-	.diagnostic_platform({video_platform_status, 8'h61, startup_flags}),
-`ifdef SWIM2
-	.diagnostic_test_status(adb_diagnostic ? debug_adb_mouse : last_io_read),
-	.diagnostic_error_status(adb_diagnostic ? debug_adb_host : last_io_write),
-`else
-	.diagnostic_test_status(adb_diagnostic ? debug_adb_mouse : cpu_test_status),
-	.diagnostic_error_status(adb_diagnostic ? debug_adb_host : startup_error_status),
-`endif
-	.diagnostic_status({debug_status[31:0], debug_status[63:48], debug_status[231:224],
-	                    debug_halted, debug_fault, cpu_stall_flt, overlay, video_milestones}),
+	.diagnostic(video_diagnostic | perf_show),
+	.diagnostic_platform(perf_show ? perf_rows[159:128] : diag_platform),
+	.diagnostic_test_status(perf_show ? perf_rows[127:64] : diag_test),
+	.diagnostic_error_status(perf_show ? perf_rows[63:0] : diag_error),
+	.diagnostic_status(perf_show ? perf_rows[223:160] : diag_status),
 	.clk(clk),
 	.nreset(nreset),
 	.ce(ce),

@@ -104,7 +104,11 @@ module ap68040
 	output logic [383:0] dbg_fe,
 	// observation only: dual-issue events, one-clock strobes, for counters
 	// (see the assignment)
-	output logic  [63:0] dbg_pev
+	output logic  [63:0] dbg_pev,
+	// observation only, levels for perf counters: [2:0] the data engine's
+	// state class, [3] DC2 held, [4] WB held (ap68040_dmu), [5] the
+	// decoder's queue is empty
+	output logic   [5:0] dbg_perf
 );
 
 // the dual-issue events behind dbg_pev
@@ -312,6 +316,7 @@ ap68040_backend #(.HAS_FPU(HAS_FPU), .FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_
 	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_retire2(dbg_retire2), .halted(dbg_halted), .fetch_stop(be_fstop)
 );
 
+logic  [4:0] dm_perf;
 ap68040_dmu #(.DC1_ATC(DC1_ATC), .PA_IO_SERIAL(PA_IO_SERIAL), .PA_VRAM_POST(PA_VRAM_POST),
 	.PA_C0_MASK(PA_C0_MASK), .PA_C0_MATCH(PA_C0_MATCH),
 	.PA_C1_MASK(PA_C1_MASK), .PA_C1_MATCH(PA_C1_MATCH)) dmu (
@@ -332,6 +337,7 @@ ap68040_dmu #(.DC1_ATC(DC1_ATC), .PA_IO_SERIAL(PA_IO_SERIAL), .PA_VRAM_POST(PA_V
 	.mt_faddr(mt_faddr),
 	.cacr(cacr), .tc(tc), .urp(urp), .srp(srp),
 	.dtt0(dtt0), .dtt1(dtt1), .itt0(itt0), .itt1(itt1),
+	.dbg_perf(dm_perf),
 	.cdis(cdis), .mdis(mdis), .tw_busy(tw_busy),
 	.iw_req(iw_req), .iw_va(iw_va), .iw_fc2(iw_fc2), .iw_done(iw_done), .iw_ent(),
 	.ic_inv(ic_inv), .ic_inv_scope(ic_inv_scope), .ic_inv_pa(ic_inv_pa),
@@ -455,6 +461,7 @@ logic   [9:0] dbg_d;
 // retires an instruction, and a second-slot one
 assign dbg_pev = {6'd0, dbg_retire2, dbg_retire, dbg_pu[19:16], dbg_pd[35:32],
                   dbg_pu[15:0], dbg_pd[31:0]};
+assign dbg_perf = {qcnt == 4'd0, dm_perf};
 assign dbg_fe = {dbg_d, 10'd0, consume, qcnt, d_redir_v, redir_v, btb_we, btb_wkind, btb_wslot, btb_wtgt,
                  d_redir_pc, redir_pc, qpc, dbg_pc, dbg_f};
 

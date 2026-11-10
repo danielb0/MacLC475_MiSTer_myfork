@@ -20,7 +20,7 @@ if [ "${1:-lint}" = machine ] || [ "${1:-lint}" = machine-lint ] ||
    [ "${1:-lint}" = profile-ddr3 ] || [ "${1:-lint}" = machine-ddr3 ]; then
     top=tb_cpu040_machine
     bench=tests/tb_cpu040_machine.sv
-    sources="$sources $(sed -n 's/^set_global_assignment -name \(SYSTEMVERILOG\|VERILOG\)_FILE \(rtl\/[^ ]*\)$/\2/p' files.qip | sed '/\/pll/d; /\/quadra_cpu040.sv/d; /\/quadra_bus040.sv/d; /\/wombat_store_buffer.sv/d') tests/support/altsyncram_stub.v"
+    sources="$sources $(sed -n 's/^set_global_assignment -name \(SYSTEMVERILOG\|VERILOG\)_FILE \(rtl\/[^ ]*\)$/\2/p' files.qip | sed '/\/pll/d; /\/quadra_cpu040.sv/d; /\/quadra_bus040.sv/d; /\/wombat_store_buffer.sv/d; /\/perf_counters.sv/d') tests/support/altsyncram_stub.v"
 fi
 # profile-ddr3: the same fixture with rtl/vram_ddr3.sv behind a DDR3 model
 defs=-DCPU_AP68040
@@ -32,7 +32,7 @@ fi
 verilator $mode --timing -Wno-fatal --top-module "$top" $defs \
     --Mdir "$obj" -Irtl -Irtl/ap68040_faster/rtl \
     -Irtl/ap68040_faster/rtl/fpu $sources rtl/quadra_bus040.sv \
-    rtl/wombat_store_buffer.sv rtl/quadra_cpu040.sv "$bench" \
+    rtl/wombat_store_buffer.sv rtl/perf_counters.sv rtl/quadra_cpu040.sv "$bench" \
     >"local/tests/cpu040-$top-build.log" 2>&1 || {
         tail -n 30 "local/tests/cpu040-$top-build.log"; exit 1;
     }
@@ -66,14 +66,14 @@ if [ "${1:-lint}" != lint ]; then
 else
     verilator --lint-only --timing -Wno-fatal --top-module tb_lc040 -DCPU_AP68040 \
         -Irtl/ap68040_faster/rtl -Irtl/ap68040_faster/rtl/fpu \
-        $sources rtl/quadra_bus040.sv rtl/wombat_store_buffer.sv rtl/quadra_cpu040.sv tests/tb_lc040.sv \
+        $sources rtl/quadra_bus040.sv rtl/wombat_store_buffer.sv rtl/perf_counters.sv rtl/quadra_cpu040.sv tests/tb_lc040.sv \
         >local/tests/cpu040-lc040-lint.log 2>&1 || {
             tail -n 30 local/tests/cpu040-lc040-lint.log; exit 1;
         }
     verilator --xml-only -Wno-fatal --top-module quadra_cpu040 \
         --xml-output local/tests/cpu040-lc040.xml \
         -Irtl/ap68040_faster/rtl -Irtl/ap68040_faster/rtl/fpu \
-        $sources rtl/quadra_bus040.sv rtl/wombat_store_buffer.sv rtl/quadra_cpu040.sv \
+        $sources rtl/quadra_bus040.sv rtl/wombat_store_buffer.sv rtl/perf_counters.sv rtl/quadra_cpu040.sv \
         >local/tests/cpu040-lc040-structure.log 2>&1 || {
             tail -n 30 local/tests/cpu040-lc040-structure.log; exit 1;
         }
@@ -83,7 +83,7 @@ else
     grep -q '<cell .*submodname="ap68040_lc040' local/tests/cpu040-lc040.xml
     verilator --lint-only -Wno-fatal --top-module quadra_cpu040 -GAP040_HAS_FPU=1 \
         -Irtl/ap68040_faster/rtl -Irtl/ap68040_faster/rtl/fpu \
-        $sources rtl/quadra_bus040.sv rtl/wombat_store_buffer.sv rtl/quadra_cpu040.sv \
+        $sources rtl/quadra_bus040.sv rtl/wombat_store_buffer.sv rtl/perf_counters.sv rtl/quadra_cpu040.sv \
         >local/tests/cpu040-full-fpu-lint.log 2>&1 || {
             tail -n 30 local/tests/cpu040-full-fpu-lint.log; exit 1;
         }

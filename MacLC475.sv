@@ -115,6 +115,10 @@ localparam CONF_STR = {
 `ifdef MACLC475_DEBUG
 	"P9O[14],Video diagnostics,Off,On;",
 	"P9O[15],ADB diagnostics,Off,On;",
+	"P9-;",
+	"P9O[46:44],Perf counters,Off,Page 0,Page 1,Page 2,Page 3,Page 4;",
+	"P9O[47],Perf counting,Run,Freeze;",
+	"P9T[48],Clear perf counters;",
 `endif
 
 `ifndef MT32PI_OFF
@@ -157,9 +161,18 @@ wire settings_pending;
 `ifdef MACLC475_DEBUG
 wire video_diagnostic = status[14] | status[15];
 wire adb_diagnostic = status[15];
+// Perf counters (rtl/perf_counters.sv): a page replaces the overlay rows.
+wire perf_show = status[46:44] != 3'd0;
+wire [2:0] perf_page = status[46:44] - 3'd1;
+wire perf_freeze = status[47];
+wire perf_clear = status[48];
 `else
 wire video_diagnostic = 1'b0;
 wire adb_diagnostic = 1'b0;
+wire perf_show = 1'b0;
+wire [2:0] perf_page = 3'd0;
+wire perf_freeze = 1'b1;
+wire perf_clear = 1'b0;
 `endif
 wire video_diagnostic_v;
 wire [1:0] scale_v, mt32_info_v;
@@ -744,6 +757,8 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.debug_fault(),
 	.debug_halted(m_debug_halted),
 	.video_diagnostic(video_diagnostic), .adb_diagnostic(adb_diagnostic),
+	.perf_show(perf_show), .perf_page(perf_page),
+	.perf_clear(perf_clear), .perf_freeze(perf_freeze),
 	.video_platform_status({8'h60, rom_loaded, pll_locked, pll_video_locked, pix_quiet,
 	                       pram_ready, cuda_storage_ready, cuda_reset_n, reset}),
 

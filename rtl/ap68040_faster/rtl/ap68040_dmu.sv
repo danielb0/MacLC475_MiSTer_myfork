@@ -181,7 +181,11 @@ module ap68040_dmu
 	input  logic        sn_inv,         // pulse: invalidate what was found
 	input  logic        sn_wr,          // pulse: write into what was found
 	input  logic [15:0] sn_wbe,         // the bytes, of...
-	input  logic [31:0] sn_wword        // ...this long word on every long word
+	input  logic [31:0] sn_wword,       // ...this long word on every long word
+
+	// observation only, for perf counters: [2:0] engine state class (see the
+	// end), [3] DC2 holds a valid uop, [4] WB holds a valid uop
+	output logic  [4:0] dbg_perf
 );
 
 localparam logic [2:0] MT_CINV = 3'd1, MT_CPUSH = 3'd2, MT_PFLUSH = 3'd3, MT_PTEST = 3'd4;
@@ -2631,5 +2635,27 @@ always_ff @(posedge clk)
 		$finish;
 	end
 // synthesis translate_on
+
+// Perf counter classes of the engine state: 0 idle, 1 lookup/load (E_S_*),
+// 2 store (E_SP_*, E_W_*), 3 line fill, 4 dirty push, 5 single bus transfer,
+// 6 table walk, 7 maintenance and the done states.
+logic [2:0] dbg_ecls;
+always_comb begin
+	case (e_st)
+	E_IDLE:                                         dbg_ecls = 3'd0;
+	E_S_START, E_S_XL, E_S_XLW, E_S_XL2, E_S_ACT, E_S_RD, E_S_RDW, E_S_RD2,
+	E_S_BUSD, E_S_NEXT, E_S_DONE:                   dbg_ecls = 3'd1;
+	E_SP_W, E_SP_2, E_SP_3, E_W_START, E_W_PART, E_W_DONE:
+	                                                dbg_ecls = 3'd2;
+	E_FILL, E_FILLW, E_FILL_W, E_FILL_INS:          dbg_ecls = 3'd3;
+	E_PUSHV, E_PUSHVW, E_PUSHV_W, E_PUSHV_B:        dbg_ecls = 3'd4;
+	E_BUS, E_BUS_W:                                 dbg_ecls = 3'd5;
+	E_TW_START, E_TW_DESC, E_TW_DESCW, E_TW_DESCW2, E_TW_DLK, E_TW_DBUS,
+	E_TW_EVAL, E_TW_UPD, E_TW_UPD_W, E_TW_LKW, E_TW_DONE:
+	                                                dbg_ecls = 3'd6;
+	default:                                        dbg_ecls = 3'd7;
+	endcase
+end
+assign dbg_perf = {m4.r.v && !adv_wb, m2.r.v && !adv_dc2, dbg_ecls};
 
 endmodule
