@@ -795,11 +795,6 @@ logic        e_kill;              // the DC2 job's uop was discarded
 logic        sp_job;              // the DC2 job is a fast split read
 logic        sp_dw;               // a write to the next set while its
                                   // stolen read was in flight (E_SP_W)
-// engine states that write no data, tag or valid bit: the RAM outputs a
-// lookup captured stay good (a fast split read; the RAM re-reads the held
-// DC1 set after its stolen read, steal_q)
-wire  e_quiet = (e_st == E_IDLE) || (e_st == E_S_START) || (e_st == E_SP_W) ||
-                (e_st == E_SP_2) || (e_st == E_SP_3) || (e_st == E_S_DONE && sp_job);
 logic        e_job;               // the engine owns the DC2 uop until it is done
 
 // bus operation built by a job, run by E_BUS
@@ -816,6 +811,17 @@ typedef struct packed {
 	logic  [1:0] tln;
 } bop_t;
 bop_t        bo;
+// a plain operand transfer on the bus (a noncachable read, a posted VRAM
+// store): the engine touches neither the cache nor its read ports
+wire  e_busq  = (e_st == E_BUS || e_st == E_BUS_W) && !bo.line && !steal &&
+                (e_ret == E_S_BUSD || e_ret == E_VRAM_DONE);
+// engine states that write no data, tag or valid bit: the RAM outputs a
+// lookup captured stay good (a fast split read; the RAM re-reads the held
+// DC1 set after its stolen read, steal_q)
+wire  e_quiet = (e_st == E_IDLE) || (e_st == E_S_START) || (e_st == E_SP_W) ||
+                (e_st == E_SP_2) || (e_st == E_SP_3) || (e_st == E_S_DONE && sp_job) ||
+                e_busq;
+wire  e_idleq = (e_st == E_IDLE) || e_busq;
 logic [31:0] bo_wd;               // write data (left aligned)
 logic [127:0] bo_line;            // line write data / line read result
 logic        bo_err;
@@ -971,6 +977,16 @@ wire ex_st    = m3.r.v && (m3.r.mem != M_LD);
 wire dc2_slow = m2.r.v && !fast_now && !fast_wait && !(st_simple && !e_job) && !e_dc2_done && !e_job &&
                 !ex_st;
 wire wb_slow  = wb_st && !wb_fast && !wb_fs && !wfs_p1 && !e_wst_done;
+// A plain frame buffer read goes from E_IDLE to the bus: what E_S_START and
+// E_S_ACT would decide is known from DC2's own lookup.  A VRAM read has no
+// side effect, so it does not wait for older instructions (dm_older); older
+// stores still go first.  Anything else takes the general path.
+wire dc2_vrd  = PA_VRAM_POST && PA_IO_SERIAL &&
+                (m2.r.mem == M_LD || m2.r.mem == M_RMW) && !m2.sfast && !m2.split &&
+                m2.x.ok && !m2.x.flt && m2.x.cm[1] && !(m2.x.hit && dc_en) &&
+                !m2.r.lock && !m2.r.pastc && (m2.r.ack == 2'd0) && (m2.r.msz != SZ_Q) &&
+                (m2.x.pa[31:21] == 11'b1111_1001_000) &&
+                !(m3.r.v && m3.r.mem != M_LD) && !(m4.r.v && m4.r.mem != M_LD);
 // A second slot's load is answered by the fast path or not at all: what
 // would take the engine -- a miss, a noncachable or split access, a table
 // search, a fault -- ends it with a fault at once, which the back end
@@ -1027,7 +1043,7 @@ end
 // engine busy for the next)
 assign dm_hold1 = sn_frz || steal || steal_q || (m1.v && m1_stale) ||
                   (e_st != E_IDLE && e_st != E_W_START &&
-                   e_st != E_W_PART && e_st != E_W_DONE);
+                   e_st != E_W_PART && e_st != E_W_DONE && !e_busq);
 
 // the table walk's descriptor line in the cache: the hit and its way, from
 // the tags and valid bits read at the walk's set (tw_busy: the valid copy
@@ -1177,16 +1193,16 @@ always_ff @(posedge clk) begin
 			m2.split <= m1_split;
 			m2.x1    <= '0;
 			m2.fast  <= m1_fast && !m1_stale && !(dw && dw_src != 2'd0 && dw_set == m1.a[CSH:4]) &&
-			            (e_st == E_IDLE);
+			            e_idleq;
 			// (a store reads nothing: the copy's state does not matter; its
 			// first part's lookup is trusted as the general path does)
 			m2.sfast <= m1_sfast && (m1.mem == M_ST ||
 			            (!m1_stale && !(dw && dw_src != 2'd0 && dw_set == m1.a[CSH:4]) &&
-			             (e_st == E_IDLE)));
+			             e_idleq));
 		end
 		else begin
 			if (adv_dc2) m2.r.v <= 1'b0;
-			if ((dw && dw_src != 2'd0 && dw_set == m2.r.a[CSH:4]) || (e_st != E_IDLE)) m2.fast <= 1'b0;
+			if ((dw && dw_src != 2'd0 && dw_set == m2.r.a[CSH:4]) || !e_idleq) m2.fast <= 1'b0;
 			// its own split lookup (a read) leaves the copy as it was
 			if (((dw && dw_src != 2'd0 && dw_set == m2.r.a[CSH:4]) || !e_quiet) && m2.r.mem != M_ST)
 				m2.sfast <= 1'b0;
@@ -1305,7 +1321,35 @@ always_ff @(posedge clk) begin
 			else if (((dc2_slow && !dm_s1) || (e_job && m2.r.v && !e_dc2_done)) && !kill_now) begin
 				// Clear at scheduling; a snoop may freeze E_S_START through a kill.
 				e_kill <= 1'b0;
-				e_st <= E_S_START;
+				if (dc2_vrd) begin
+					e_job      <= 1'b1;
+					e_part     <= 1'b0;
+					e_va       <= m2.r.a;
+					e_x        <= m2.x;
+					e_acc      <= '0;
+					e_flt      <= 1'b0;
+					e_fromline <= 1'b0;
+					e_fillhit  <= 1'b0;
+					e_n        <= nbytes(m2.r.msz);
+					sp_dw      <= 1'b0;
+					sp_job     <= 1'b0;
+					bo.line    <= 1'b0;
+					bo.rd      <= 1'b1;
+					bo.tt      <= fc_tt(m2.r.fc);
+					bo.tm      <= fc_tm(m2.r.fc);
+					bo.upa     <= m2.x.upa;
+					bo.ci      <= 1'b1;
+					bo.lock    <= 1'b0;
+					bo.locke   <= 1'b0;
+					bo.ack     <= 2'd0;
+					bo.tln     <= 2'd0;
+					bo_pa      <= m2.x.pa;
+					bo_left    <= nbytes(m2.r.msz);
+					e_ret      <= E_S_BUSD;
+					e_st       <= E_BUS;
+				end
+				else
+					e_st <= E_S_START;
 			end
 			else if (iw_req && !iw_done) begin
 				e_ret <= E_I_DONE;

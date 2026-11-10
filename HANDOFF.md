@@ -1,5 +1,20 @@
 # Project handoff
 
+## CUDA firmware conversion
+
+- Objective: convert a user-supplied raw CUDA ROM binary into the `$readmemh`
+  byte-per-line hex image used by the build.
+- Baseline: `cuda_mcu.sv` loads `local/software/cuda341s0788.hex` into a
+  4,352-byte ROM array; the raw firmware binary is not in the repository.
+- Changes: added `scripts/cuda_bin_to_hex.py` with exact-size validation,
+  default input filename `cuda341s0788.bin`, and default output path;
+  explicit paths remain supported. README setup shows the no-argument form.
+- Checks: supplied binary is 4,352 bytes; converter wrote a 17,408-byte text
+  image (4,352 two-digit hex lines).
+- Unresolved: firmware compatibility and generated image have not been
+  verified by building. Exact next step: use the image in the next user-run
+  Quartus build.
+
 ## Public README cleanup
 
 - Objective: provide concise repository setup and status information for

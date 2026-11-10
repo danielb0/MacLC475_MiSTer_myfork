@@ -10,8 +10,10 @@ A MiSTer FPGA implementation of the Macintosh LC 475 / Quadra 605, with a 25 MHz
   (often named `Macintosh LC 475 ROM` or `Quadra 605 ROM`); verify the
   `FF7439EE` ROM checksum. MiSTer expects it at
   `games/MacLC475/boot0.rom`.
-- Supply the required CUDA firmware as `local/software/cuda341s0788.hex` when
-  building. ROM and firmware files are not included.
+- Convert the raw 4,352-byte CUDA ROM binary with
+  `python scripts/cuda_bin_to_hex.py`. It looks for `cuda341s0788.bin` in the
+  current directory and writes `local/software/cuda341s0788.hex`; input and
+  output paths can also be supplied. ROM and firmware files are not included.
 - Select disk images from the core's OSD. Existing MacQuadra605 disk and
   PRAM files can be reused; preserve backups when moving or changing mounts.
 

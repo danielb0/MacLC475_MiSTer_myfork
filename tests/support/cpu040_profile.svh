@@ -239,8 +239,12 @@ task automatic run_profile;
             if (k >= 3) begin
                 // a posted store (AP040_VRAM_POST) from the untimed first
                 // iteration can reach the bus inside the window: one extra
-                // write beat; the run's exact total is checked at the end
-                if (profile_beats[3]-first_beats[3] != (k == 4 ? 0 : 255) ||
+                // write beat; the run's exact total is checked at the end.
+                // A VRAM read does not wait for older instructions: the read
+                // behind the loop's last DBRA reaches the bus and is discarded
+                if ((k == 4 ? profile_beats[3]-first_beats[3] != 0 :
+                     (profile_beats[3]-first_beats[3] < 255 ||
+                      profile_beats[3]-first_beats[3] > 256)) ||
                     (k == 3 ? profile_beats[4]-first_beats[4] != 0 :
                      (profile_beats[4]-first_beats[4] < 255 ||
                       profile_beats[4]-first_beats[4] > 256)))
