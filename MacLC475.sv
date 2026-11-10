@@ -116,7 +116,7 @@ localparam CONF_STR = {
 	"P9O[14],Video diagnostics,Off,On;",
 	"P9O[15],ADB diagnostics,Off,On;",
 	"P9-;",
-	"P9O[46:44],Perf counters,Off,Page 0,Page 1,Page 2,Page 3,Page 4;",
+	"P9O[46:44],Perf counters,Off,Page 0,Page 1,Page 2,Page 3,Page 4,Page 5,Page 6;",
 	"P9O[47],Perf counting,Run,Freeze;",
 	"P9T[48],Clear perf counters;",
 `endif
@@ -592,6 +592,7 @@ wire        vid_line_req;
 wire [20:0] vid_line_addr;
 wire        vid_line_swap;
 wire        vram_wq_room;
+wire [11:0] vram_perf_ev;                  // rtl/perf_counters.sv pages 5-6
 
 wire [255:0] m_debug_status;
 wire [127:0] m_debug_status2;
@@ -759,6 +760,7 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.video_diagnostic(video_diagnostic), .adb_diagnostic(adb_diagnostic),
 	.perf_show(perf_show), .perf_page(perf_page),
 	.perf_clear(perf_clear), .perf_freeze(perf_freeze),
+	.perf_vram_ev(vram_perf_ev),
 	.video_platform_status({8'h60, rom_loaded, pll_locked, pll_video_locked, pix_quiet,
 	                       pram_ready, cuda_storage_ready, cuda_reset_n, reset}),
 
@@ -1197,6 +1199,7 @@ always @(posedge clk_sys) begin
 end
 
 assign vram_wq_room      = 1'b1;
+assign vram_perf_ev      = 12'd0;
 assign vram_ddr_req      = 1'b0;
 assign vram_ddr_we       = 1'b0;
 assign vram_ddr_addr     = 29'd0;
@@ -1232,6 +1235,7 @@ vram_ddr3 #(
 	.vram_ack(vram_ack),
 	.vram_rdata(vram_qa),
 	.vram_wq_room(vram_wq_room),
+	.perf_ev(vram_perf_ev),
 
 	.clk_vid(clk_vid),
 	.reset_vid(!nreset_vid),

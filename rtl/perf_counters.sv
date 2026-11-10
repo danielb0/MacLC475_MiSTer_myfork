@@ -2,7 +2,7 @@
 // hardware, read through the DAFB hex overlay (OSD Debug page, debug builds).
 //
 // Every counter counts clk cycles (25 MHz) or bus beats while not frozen;
-// clear zeroes them all.  Five pages of six counters; the overlay shows one
+// clear zeroes them all.  Seven pages of six counters; the overlay shows one
 // page as four rows:
 //   row 1 (64 bits): counters 0, 1     row 3 (64 bits): counters 2, 3
 //   row 2 (32 bits): header            row 4 (64 bits): counters 4, 5
@@ -20,6 +20,14 @@
 // Page 4: VRAM read beats, VRAM read cycles, VRAM write beats, VRAM write
 //         cycles, machine-side (after the store buffer) request cycles,
 //         machine-side request cycles without an ack
+// Page 5: VRAM controller (vram_ddr3), reads: hits in the line cache, line
+//         fills issued, then read-wait cycles with the DDR3 state machine
+//         at: idle, write drain, DMA burst, DDR3 accepting the fill
+// Page 6: VRAM controller, more read-wait cycles and fill events: read-wait
+//         cycles on fill data beats, read-wait cycles in idle with a FIFO
+//         conflict, fills of the next sequential line, refills of a held
+//         tag, reads acked from another line's beat (must be 0), read-wait
+//         cycles under another line's fill tail
 //
 // The CPU side is the CPU's own bus, before the store buffer: a request
 // cycle there is a cycle the CPU's bus unit waits.  Beats are acked
@@ -37,6 +45,7 @@ module perf_counters (
 	input             c_req, c_ack, c_write, c_instr,
 	input      [31:0] c_addr,
 	input             m_req, m_ack,
+	input      [11:0] vram_ev,         // vram_ddr3 event strobes, pages 5-6
 
 	output     [63:0] row1,
 	output     [31:0] row2,
@@ -44,7 +53,7 @@ module perf_counters (
 	output     [63:0] row4
 );
 
-localparam N = 30;
+localparam N = 42;
 
 wire [2:0] ecls = core[2:0];
 wire rom  = c_addr[31:28] == 4'h4;
@@ -64,6 +73,8 @@ wire [5:0] cat = {
 };
 
 wire [N-1:0] ev = {
+	// pages 5 and 6
+	vram_ev,
 	// page 4
 	m_req && !m_ack, m_req,
 	c_req && vram && c_write, beat && vram && c_write,
@@ -98,12 +109,12 @@ always @(posedge clk)
 	if (clear) ovf <= 1'b0;
 	else if (|wrap) ovf <= 1'b1;
 
-wire [2:0] pg = (page > 3'd4) ? 3'd4 : page;
-wire [4:0] base = pg * 3'd6;
+wire [2:0] pg = (page > 3'd6) ? 3'd6 : page;
+wire [5:0] base = pg * 3'd6;
 
-assign row1 = {cnt[base], cnt[base + 5'd1]};
+assign row1 = {cnt[base], cnt[base + 6'd1]};
 assign row2 = {12'hC00, 1'b0, pg, 3'd0, freeze, 3'd0, ovf, 8'h00};
-assign row3 = {cnt[base + 5'd2], cnt[base + 5'd3]};
-assign row4 = {cnt[base + 5'd4], cnt[base + 5'd5]};
+assign row3 = {cnt[base + 6'd2], cnt[base + 6'd3]};
+assign row4 = {cnt[base + 6'd4], cnt[base + 6'd5]};
 
 endmodule

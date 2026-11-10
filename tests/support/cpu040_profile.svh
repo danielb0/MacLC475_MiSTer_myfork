@@ -35,7 +35,7 @@ end
 // are never cleared here; check them against this file's own counts.
 task automatic perf_check;
     integer m_req, m_wait;
-    for (integer p = 0; p < 5; p++)
+    for (integer p = 0; p < 7; p++)
         $display("PROFILE: perf page %0d: %0d %0d %0d %0d %0d %0d", p,
                  dut.cpu.perf.cnt[p*6], dut.cpu.perf.cnt[p*6+1], dut.cpu.perf.cnt[p*6+2],
                  dut.cpu.perf.cnt[p*6+3], dut.cpu.perf.cnt[p*6+4], dut.cpu.perf.cnt[p*6+5]);
@@ -52,6 +52,18 @@ task automatic perf_check;
                dut.cpu.perf.cnt[29], m_wait, dut.cpu.perf.cnt[24], profile_beats[3],
                dut.cpu.perf.cnt[26], profile_beats[4]);
     $display("PASS: perf counters agree with the profile's bus counts");
+`ifdef VRAM_DDR3
+    // every VRAM read beat is a hit or a fill beat (pages 5 and 6)
+    if (dut.cpu.perf.cnt[30] + dut.cpu.perf.cnt[31] >
+            dut.cpu.perf.cnt[24] + dut.cpu.perf.cnt[24] / 50 ||
+        dut.cpu.perf.cnt[30] + dut.cpu.perf.cnt[31] + dut.cpu.perf.cnt[24] / 50 <
+            dut.cpu.perf.cnt[24] || dut.cpu.perf.cnt[40] != 0)
+        $fatal(1, "VRAM perf events disagree: hits %0d + fills %0d vs read beats %0d, wrong-line acks %0d",
+               dut.cpu.perf.cnt[30], dut.cpu.perf.cnt[31], dut.cpu.perf.cnt[24],
+               dut.cpu.perf.cnt[40]);
+    $display("PASS: VRAM hits %0d + fills %0d vs read beats %0d", dut.cpu.perf.cnt[30],
+             dut.cpu.perf.cnt[31], dut.cpu.perf.cnt[24]);
+`endif
 endtask
 
 // +TRACE_VRAM_RD: one line per clock through a few masked updates (case 7)

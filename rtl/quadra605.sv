@@ -160,6 +160,7 @@ module quadra605
 	input   [2:0] perf_page,
 	input         perf_clear,
 	input         perf_freeze,
+	input  [11:0] perf_vram_ev,
 	input  [15:0] video_platform_status,
 
 	// built-in Ethernet: the OSD switch (latched under reset by the top) and the
@@ -382,6 +383,7 @@ wombat_cpu #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 	.debug_test_status(cpu_test_status),
 	.debug_instruction_pc(cpu_instruction_pc),
 	.perf_clear(perf_clear), .perf_freeze(perf_freeze), .perf_page(perf_page),
+	.perf_vram_ev(perf_vram_ev),
 	.perf_rows(perf_rows)
 );
 

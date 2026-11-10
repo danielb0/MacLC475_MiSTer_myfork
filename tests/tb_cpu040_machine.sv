@@ -40,6 +40,8 @@ integer vector_reads = 0, irq_reads = 0, fill_beats = 0, cache_reads = 0;
 integer runs = 0, plain_transfers = 0;
 reg [31:0] wait_pc, done_pc;
 
+wire [11:0] vram_pev;  // vram_ddr3 perf events (zero without it)
+
 quadra605 #(.CDROM(0), .SONIC(0)) dut (
     .clk(clk), .nreset(nreset), .cuda_power_reset_n(nreset), .cuda_host_reset_n(nreset),
     .ce(1'b1), .clk_vid(clk), .nreset_vid(nreset), .ram_cfg(3'd0), .mon_sel(2'd0),
@@ -60,7 +62,8 @@ quadra605 #(.CDROM(0), .SONIC(0)) dut (
     .pram_h_we(1'b0), .pram_h_addr(7'd0), .pram_h_wdata(16'd0),
     .scc_rxd_a(1'b1), .scc_cts_a(1'b1), .scc_rxd_b(1'b1),
     .eth_mem_accept(1'b0), .eth_mem_rvalid(1'b0), .eth_mem_rdata(64'd0),
-    .debug_halted(halted), .debug_fault(fault), .dbg_overlay(overlay)
+    .debug_halted(halted), .debug_fault(fault), .dbg_overlay(overlay),
+    .perf_vram_ev(vram_pev)
 );
 
 // Exercise CPU interrupt entry at the IOSB output boundary.
@@ -160,7 +163,7 @@ vram_ddr3 #(.DDR_VRAM_BASE(TB_VRAM_BASE), .VRAM_1MB(1)) vram_inst (
     .mem_req(mem_req), .mem_is_vram(mem_memsel == 2), .mem_write(mem_write),
     .mem_addr(mem_addr), .mem_be(mem_be), .mem_wdata(mem_wdata),
     .mem_vram_wp(mem_vram_wp), .vram_ack(vram_ddr_ack_w), .vram_rdata(vram_ddr_q),
-    .vram_wq_room(vram_room),
+    .vram_wq_room(vram_room), .perf_ev(vram_pev),
     .clk_vid(clk), .reset_vid(!nreset), .vid_col_word(10'd0),
     .vid_stride(14'(vid_stride_bytes)), .vid_line_req(line_req),
     .vid_line_addr(line_addr), .vid_line_swap(line_swap), .vid_rdata(),
@@ -178,6 +181,7 @@ always @(posedge clk) if (nreset) begin
     if (vd_wait_wr) vd_busy_wr++;
 end
 `else
+assign vram_pev = 12'd0;
 // Match production BRAM capture/deliver timing; storage omits stride compaction.
 always @(posedge clk) begin
     if (!nreset) vram_phase <= 0;

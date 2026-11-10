@@ -74,6 +74,7 @@ module quadra_cpu040
 	input         perf_clear,
 	input         perf_freeze,
 	input   [2:0] perf_page,
+	input  [11:0] perf_vram_ev,
 	output [223:0] perf_rows
 );
 
@@ -175,7 +176,7 @@ perf_counters perf (
 	.retire(dbg_pev[56]), .retire2(dbg_pev[57]), .core(dbg_perf),
 	.c_req(cpu_bus_req), .c_ack(cpu_bus_ack), .c_write(cpu_bus_write),
 	.c_instr(cpu_bus_instr), .c_addr(cpu_bus_addr),
-	.m_req(bus_req), .m_ack(bus_ack),
+	.m_req(bus_req), .m_ack(bus_ack), .vram_ev(perf_vram_ev),
 	.row1(perf_rows[223:160]), .row2(perf_rows[159:128]),
 	.row3(perf_rows[127:64]), .row4(perf_rows[63:0])
 );

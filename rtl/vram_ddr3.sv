@@ -28,6 +28,8 @@ module vram_ddr3 #(
 	output reg        vram_ack,
 	output reg [31:0] vram_rdata,
 	output            vram_wq_room,    // write queue has room
+	// one-clock event strobes for rtl/perf_counters.sv pages 5-6
+	output     [11:0] perf_ev,
 
 	//---------------------------------------------------------
 	// Video Scanout interface (clk_vid)
@@ -725,5 +727,54 @@ always @(posedge clk_sys) begin
 		endcase
 	end
 end
+
+// ---- perf events (pages 5 and 6 of rtl/perf_counters.sv) ----
+// a read answered from the line cache
+wire pe_hit  = mem_req && mem_is_vram && !mem_write && !vram_ack &&
+               rd_cache_hit;
+// a line fill issued for a pending read (S_IDLE branch 1)
+wire pe_fill = !reset && (state == S_IDLE) &&
+               !(dma_late && (dma_state == DMA_BURST_REQ) && !dma_take) &&
+               cpu_rd_pend && !fifo_conflict && !cpu_vram_write;
+// a pending read acked by a fill beat (S_CPU_READ / S_CPU_DATA)
+wire pe_fill_ack = !reset && cpu_rd_pend && vram_ddr_rvalid &&
+                   (((state == S_CPU_READ) && vram_ddr_ack &&
+                     (cur_rd_beat == 2'd0)) ||
+                    ((state == S_CPU_DATA) && (cur_rd_beat == rd_burst_beat)));
+wire pe_tag_held = (cur_rd_tag == rd_cache_tag_0) ||
+                   (cur_rd_tag == rd_cache_tag_1) ||
+                   (cur_rd_tag == rd_cache_tag_2) ||
+                   (cur_rd_tag == rd_cache_tag_3);
+reg [14:0] pe_last_tag = 15'd0;
+always @(posedge clk_sys) if (pe_fill) pe_last_tag <= cur_rd_tag;
+
+assign perf_ev = {
+	// page 6
+	// 11: waits under another line's fill tail
+	cpu_rd_pend && (state == S_CPU_DATA) && (cur_rd_tag != fill_tag),
+	// 10: read acked with ANOTHER line's beat (bug if > 0)
+	pe_fill_ack && (cur_rd_tag != fill_tag),
+	// 9: refill of a line whose tag is held
+	pe_fill && pe_tag_held,
+	// 8: fill of the line after the last one filled
+	pe_fill && (cur_rd_tag == pe_last_tag + 15'd1),
+	// 7: wait: FIFO holds a write for the line
+	cpu_rd_pend && (state == S_IDLE) && fifo_conflict,
+	// 6: wait: fill data beats
+	cpu_rd_pend && (state == S_CPU_DATA),
+	// page 5
+	// 5: wait: DDR3 accepting the fill
+	cpu_rd_pend && (state == S_CPU_READ),
+	// 4: wait: scanline DMA burst
+	cpu_rd_pend && ((state == S_DMA_BURST) || (state == S_DMA_DATA)),
+	// 3: wait: write FIFO drain
+	cpu_rd_pend && (state == S_CPU_WRITE),
+	// 2: wait: idle (conflict, write clock, turnaround)
+	cpu_rd_pend && (state == S_IDLE),
+	// 1: fills issued (misses)
+	pe_fill,
+	// 0: hits
+	pe_hit
+};
 
 endmodule
