@@ -1,14 +1,39 @@
 # SWIM II write trace
 
+Known failure: System 7.5.3 Revision 2 Install 01 booted, then became
+unbootable (Happy Mac, reset) during folder creation/eject/remount testing.
+The exact failing step and deployed RBF/Main hashes were not recorded.
+Both images were already supplied and compared; do not request them again.
+
+- Clean: `D:/MiSTer/Macintosh/Mac OS/Apple SSW and Mac OS/7/Apple Mac OS 7.5.3 Revision 2 (3.5-1.44mb)/Install 01.img`
+  SHA-256: `c290f3d285f7da06561e43ec09861b678d2fc717d8bf73a73ccc650be1636aa4`.
+- Damaged: `C:/Workspace/Git/MacQuadra605_MiSTer/local/Install 01-bad.img`
+  SHA-256: `ee4710ec5608e2e65a575fc181bc0cd5ebf694937eb8fca752bdbac720d534e8`.
+
+Only LBAs 2, 26 and 28 differ (250 bytes). The damaged catalog references
+leaf node 4 at LBA 30, which remains zero. This proves an incomplete catalog
+update, not where or when the write was lost. The remaining evidence is a
+hardware trace through decode, RAM commit and host save on disposable media.
+
 On a diagnostic branch, add `SWIM2_TRACE=1` and `rtl/swim2_trace.sv` to
 the existing `MacLC475.qsf` assignments. Build `MacLC475.qpf`; output stays
 in `output_files/`. Do not add another project.
 This diagnostic project replaces the HPS modem UART output with a passive trace.
 Normal projects retain guest serial output and omit the tracer. Stock sys is unchanged.
-Check the diagnostic fit/timing before loading it; no fitted result is established.
+Fitted 2026-11-04 (`9ed2fd9`): 31,607 ALMs, 510 RAM blocks (92%); positive
+slack, minimum hold 0.117 ns. Recheck fit/timing after any trace rebuild.
 
-Use disposable floppy copies. Preserve the clean/damaged installer images.
-Record the RBF, Main and input-image hashes with the capture. On MiSTer:
+Prepare disposable media and verified RBF/Main copies on the host:
+
+```powershell
+./scripts/prepare_swim2_capture.ps1 -Rbf output_files/MacLC475.rbf -Main main/MiSTer -Image 'path/to/clean.img' -OutputDirectory local/captures/run01
+```
+
+Use a fitted trace RBF. The helper refuses an existing output directory and
+leaves inputs untouched. Its manifest identifies the bundled files; confirm
+those RBF/Main copies are deployed and record revisions and exact actions in
+`steps.txt`. Preserve the clean/damaged installer images. Mount only the
+bundled floppy copy. On MiSTer:
 
 ```sh
 stty -F /dev/ttyS1 115200 raw -echo -ixon -ixoff cs8 -cstopb -parenb
@@ -16,7 +41,10 @@ cat /dev/ttyS1 > /media/fat/swim2-trace.txt
 ```
 
 Start capture before mounting the disposable image, repeat the failing action,
-then stop capture. Decode the copied file with:
+then eject and wait for host I/O to finish before stopping capture. Preserve
+the saved floppy as `floppy-after.img` alongside the trace and manifest, and
+record its SHA-256 in `steps.txt`. The manifest's image hash is the pre-write
+copy. Decode the copied trace with:
 
 ```text
 python scripts/decode_swim2_trace.py swim2-trace.txt

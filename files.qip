@@ -5,6 +5,8 @@ set_global_assignment -name VERILOG_FILE rtl/pll_video.v
 set_global_assignment -name QIP_FILE rtl/ap68040_faster/rtl/ap68040.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra_bus040.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra_cpu040.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/perf_counters.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_store_buffer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_bus32.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra605.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/startup_probe.sv
@@ -14,6 +16,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/memcjr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/iosb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via6522.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dafb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/vram_ddr3.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache_128k.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/easc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ncr53c96.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cd_audio.sv

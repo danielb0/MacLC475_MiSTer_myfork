@@ -5,6 +5,7 @@ output_files/
 greybox_tmp/
 simulation/
 build_id.v
+c5_pin_model_dump.txt
 jtag.cdf
 *.qws
 *.smsg
@@ -19,3 +20,4 @@ jtag.cdf
 *.qdf
 *.wlf
 __pycache__/
+refs/

@@ -1,34 +1,51 @@
 # Current direction
 
-Updated 2026-11-01.
+Updated 2026-11-04.
 
-- One builder: `MacLC475.qpf`. Use branches for experiments, including trace
-  captures. Preserve stock sys; project adaptations belong outside it.
-- Imported from `MacQuadra605_MiSTer` commit `7a66351` (final-quadra-check).
-  Active SWIM2 configuration, pipelined LC040, 25/75 MHz clocks, seed 38,
-  4 KiB caches, no FPU, Ethernet/MT32-pi off and scaler startup guard retained.
-  Old CPU, alternate projects, reports, binaries and investigation archives
-  remain in the original repository. No new CPU donor has been imported yet.
-- Keep the accepted compacted BRAM VRAM. Faithful VRAM is a separate project.
-  Do not change clocks or memory architecture during the CPU refresh.
-- Next: import pinned small33 CPU on a branch, preserving local LC040
-  decoding, format-4/RTE and machine bus contracts. See `CPU_DONOR.md`.
-  Pass CPU/bus/LC040/machine/MMU checks, then hand off one build for fitting
-  and guest testing. Do not begin an independent CPU optimization campaign.
-- Machine milestone: OEM floppy installation onto blank SCSI, disk swaps,
-  eject, persisted writes and boot from the installed disk. Floppy catalog
-  corruption remains unresolved and write acceptance is paused. Existing
-  catalog regressions do not reproduce the corruption. Capture the failing
-  guest sequence on disposable copies before guessing at RTL fixes.
-- Own routine decisions and batch coherent implementation. "Continue" is
-  sufficient direction. Research/tests must unblock a concrete milestone.
-  Ask for missing resources, consequential ambiguity or hardware observations.
-  Elle runs full Quartus builds and long scripts. Do not create new chats
-  unless asked. Keep documentation short and current.
+## Fixed
 
-Import verification, 2026-11-01:
+- One builder: `MacLC475.qpf`; branches for experiments. Stock sys only.
+- 25/75 MHz clocks, seed 38, 4 KiB caches, no FPU, Ethernet/MT32-pi off.
+- CPU refresh complete on `codex/small33-lc040` (Q800 small33, DUAL=0,
+  BTIC=0); see `CPU_DONOR.md`. `main` holds the older reference CPU.
+- Compacted BRAM VRAM (320 KB physical, 512 KB advertised). Full VRAM is a
+  later option via the Q800 DDR3-VRAM branch (`6f72684`); keep VRAM behind
+  the memsel beat port and DAFB fetch port so a backend swap stays local.
+- OSD: Dani's computer-core layout. Memory/monitor wait for reset; aspect
+  and scale apply live. Diagnostics need `MACLC475_DEBUG` (P9).
 
-- Quartus 17.0.2 Analysis & Elaboration passes: zero errors, 192 warnings.
-- 96 preserved imports verify; 124 imported files present. Stock sys matches
-  the source byte-for-byte. No full build, fit or new hardware acceptance.
-- Repository initialized on main; imported files are uncommitted.
+## Experiment
+
+- `exp/lean-ddr3-vram`: lean Q800 CPU + DDR3 VRAM + ROM cache + store buffer, no FPU. See `CPU_DONOR.md`. Awaiting fit and hardware comparison against `diag/swim2-trace`/`codex/small33-lc040`.
+
+## State
+
+- Guest: 7.5.3 CD install to SCSI HDD, 7.5.5 update via floppy, reboots and
+  memory changes work.
+- Floppy catalog corruption unresolved; regressions do not reproduce it.
+  Trace build on `diag/swim2-trace` fits (positive slack). See `SWIM2_TRACE.md`.
+- `diag/swim2-trace` commit `9ed2fd9` mixes the scale/AR and docs changes
+  with the trace qsf lines. Return only non-trace changes to the candidate.
+- Latest candidate fit (`5ea79ea`): 75% ALMs, 91% RAM blocks, positive slack.
+- Unrecorded: CPU execution tests (`tests/run_cpu040.sh` smoke/lc040/machine/
+  mmu), matched resource comparison with `main`.
+
+## Next
+
+1. Hardware capture of the floppy failure; decode, then fix with regression.
+2. Performance baseline: Speedometer 3 + Machine Report from a real LC 475
+   (Elle sourcing), matched setup. Target is real 25 MHz behavior; slower
+   points at the memory path, faster means MEMCjr wait states. A CPU-upgrade
+   enhancement may follow later.
+3. Remaining qualification: see `RELEASE_READINESS.md`.
+
+## Open questions
+
+- May DUAL/BTIC/other CPU options be tried if the bus work falls short
+  (RAM blocks at 91%)?
+- V-Integer: README and `RELEASE_READINESS.md` still report failure; resolved?
+
+## Working rules
+
+Own routine decisions; "continue" suffices. Ask for resources, consequential
+ambiguity or hardware observations. Elle runs Quartus builds and long scripts.

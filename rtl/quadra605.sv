@@ -56,7 +56,7 @@ module quadra605
 	// 4 MB soldered RAM plus an optional SIMM, latched on reset.
 	// 0=4 MB, 1=5 MB, 2=6 MB, 3=8 MB, 4=12 MB, 5=20 MB, 6=36 MB.
 	input   [2:0] ram_cfg,
-	input         mon_12in,      // DAFB monitor: 0 = 13" 640x480, 1 = 12" 512x384
+	input   [1:0] mon_sel,       // DAFB monitor (dafb.sv): 0 = 13" 640x480, 1 = 12" 512x384
 
 	// platform memory beat port
 	output reg        mem_req,
@@ -73,9 +73,16 @@ module quadra605
 	output reg  [3:0] mem_wp_be,
 	output reg [31:0] mem_wp_data,
 	input             mem_wq_room,
+	input             mem_vram_wq_room,
 	// a VRAM write straight into the VRAM block RAM at mem_addr/be/wdata,
 	// with mem_req low (2026-09-26)
 	output reg        mem_vram_wp,
+	// a VRAM read answered from vram_ddr3's line cache in the request's own
+	// clock (bus_vram_fast below); tie mem_vram_fast_hit low without one
+	output     [31:2] mem_vram_fast_addr,
+	output            mem_vram_fast_take,
+	input             mem_vram_fast_hit,
+	input      [31:0] mem_vram_fast_data,
 	input             mem_line_valid,
 	input      [26:4] mem_line_tag,
 	input     [127:0] mem_line_data,
@@ -90,6 +97,10 @@ module quadra605
 	output     [21:2] vid_addr,
 	input      [31:0] vid_rdata,
 	output     [13:0] vid_stride,
+	output      [9:0] vid_col_word,
+	output            vid_line_req,
+	output     [20:0] vid_line_addr,
+	output            vid_line_swap,
 	output      [7:0] VGA_R,
 	output      [7:0] VGA_G,
 	output      [7:0] VGA_B,
@@ -150,6 +161,12 @@ module quadra605
 	output        debug_halted,
 	input         video_diagnostic,
 	input         adb_diagnostic,
+	// perf counters: perf_show replaces the overlay's rows with perf_page
+	input         perf_show,
+	input   [2:0] perf_page,
+	input         perf_clear,
+	input         perf_freeze,
+	input  [11:0] perf_vram_ev,
 	input  [15:0] video_platform_status,
 
 	// built-in Ethernet: the OSD switch (latched under reset by the top) and the
@@ -319,6 +336,7 @@ startup_probe startup (
 	.pc(cpu_instruction_pc), .ir(debug_status[63:48]),
 	.test_status(cpu_test_status), .error_status(startup_error_status), .flags(startup_flags)
 );
+wire [223:0] perf_rows;
 `ifdef CPU_AP68040
 quadra_cpu040 #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 `else
@@ -369,7 +387,10 @@ wombat_cpu #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 	.debug_status(debug_status),
 	.debug_status2(debug_status2),
 	.debug_test_status(cpu_test_status),
-	.debug_instruction_pc(cpu_instruction_pc)
+	.debug_instruction_pc(cpu_instruction_pc),
+	.perf_clear(perf_clear), .perf_freeze(perf_freeze), .perf_page(perf_page),
+	.perf_vram_ev(perf_vram_ev),
+	.perf_rows(perf_rows)
 );
 
 `ifdef CPU_AP68040
@@ -553,21 +574,26 @@ memcjr #(.CLK_HZ(CLK_HZ)) memc (
 	.bank_mode(memc_bank_mode), .memory_top(memc_memory_top)
 );
 
+// The overlay's four rows: the machine's diagnostics, or a perf counter page.
+wire [31:0] diag_platform = {video_platform_status, 8'h61, startup_flags};
+`ifdef SWIM2
+wire [63:0] diag_test  = adb_diagnostic ? debug_adb_mouse : last_io_read;
+wire [63:0] diag_error = adb_diagnostic ? debug_adb_host : last_io_write;
+`else
+wire [63:0] diag_test  = adb_diagnostic ? debug_adb_mouse : cpu_test_status;
+wire [63:0] diag_error = adb_diagnostic ? debug_adb_host : startup_error_status;
+`endif
+wire [63:0] diag_status = {debug_status[31:0], debug_status[63:48], debug_status[231:224],
+                           debug_halted, debug_fault, cpu_stall_flt, overlay, video_milestones};
 dafb dafb (
 	.clk_vid(clk_vid),
 	.nreset_vid(nreset_vid),
-	.mon_12in(mon_12in),
-	.diagnostic(video_diagnostic),
-	.diagnostic_platform({video_platform_status, 8'h61, startup_flags}),
-`ifdef SWIM2
-	.diagnostic_test_status(adb_diagnostic ? debug_adb_mouse : last_io_read),
-	.diagnostic_error_status(adb_diagnostic ? debug_adb_host : last_io_write),
-`else
-	.diagnostic_test_status(adb_diagnostic ? debug_adb_mouse : cpu_test_status),
-	.diagnostic_error_status(adb_diagnostic ? debug_adb_host : startup_error_status),
-`endif
-	.diagnostic_status({debug_status[31:0], debug_status[63:48], debug_status[231:224],
-	                    debug_halted, debug_fault, cpu_stall_flt, overlay, video_milestones}),
+	.mon_sel(mon_sel),
+	.diagnostic(video_diagnostic | perf_show),
+	.diagnostic_platform(perf_show ? perf_rows[159:128] : diag_platform),
+	.diagnostic_test_status(perf_show ? perf_rows[127:64] : diag_test),
+	.diagnostic_error_status(perf_show ? perf_rows[63:0] : diag_error),
+	.diagnostic_status(perf_show ? perf_rows[223:160] : diag_status),
 	.clk(clk),
 	.nreset(nreset),
 	.ce(ce),
@@ -584,6 +610,10 @@ dafb dafb (
 	.vid_addr(vid_addr),
 	.vid_rdata(vid_rdata),
 	.vid_stride(vid_stride),
+	.vid_col_word(vid_col_word),
+	.vid_line_req(vid_line_req),
+	.vid_line_addr(vid_line_addr),
+	.vid_line_swap(vid_line_swap),
 
 	.vga_r(VGA_R),
 	.vga_g(VGA_G),
@@ -748,6 +778,7 @@ wire [31:0] bus_wr_left  = (bus_size == 2'd0) ? {bus_wdata[7:0], 24'd0} :
 // buffer behind it (the platform fixture: 914k such stores per Whetstone
 // loop, the buffer full 15 % of the time).  mem_wq_room means two free
 // entries, and nothing else pushes between the halves.
+reg         wr_split_vram;
 reg  [31:2] wr_split_addr;
 reg   [3:0] wr_split_be;
 reg  [31:0] wr_split_data;
@@ -767,8 +798,9 @@ wire bus_wr_direct = (DIRECT_WRITES != 0) && (svc == S_IDLE) && !walker_pend && 
 // clocks later at the earliest, after the write has landed.
 wire bus_vram_direct = (DIRECT_WRITES != 0) && (svc == S_IDLE) && !walker_pend && !cpu_berr &&
 	                   !bus_miss_ack && !bus_line_ack && !bus_adapter_active && !wr_split_pend &&
-	                   !bus_ack_adapter && bus_req && bus_write && !bus_wr_span &&
-	                   (decode(bus_addr[31:2]) == 3'd2);
+	                   !bus_ack_adapter && bus_req && bus_write &&
+	                   (!bus_wr_span || (decode(bus_addr[31:2] + 30'd1) == 3'd2)) &&
+	                   (decode(bus_addr[31:2]) == 3'd2) && mem_vram_wq_room;
 
 // A VRAM read inside one longword goes the way of a RAM first miss: into
 // S_MEM from bus_req, acknowledged through bus_miss_ack with the bytes
@@ -778,6 +810,15 @@ wire bus_vram_rd = (svc == S_IDLE) && !walker_pend && !cpu_berr &&
 	               !bus_miss_ack && !bus_line_ack && !bus_adapter_active && !wr_split_pend &&
 	               !bus_ack_adapter && bus_req && !bus_write && !bus_wr_span &&
 	               (decode(bus_addr[31:2]) == 3'd2);
+
+// A VRAM read that hits vram_ddr3's line cache is acknowledged like a
+// retained RAM line: looked up from bus_addr, acknowledge registered in
+// the request's own clock, no mem_req.  Two clocks a read instead of the
+// four through S_MEM (mem_req, vram_ack, bus_miss_ack registered in turn).
+assign mem_vram_fast_addr = bus_addr[31:2];
+wire        bus_vram_fast = bus_vram_rd && mem_vram_fast_hit;
+assign mem_vram_fast_take = bus_vram_fast;
+wire [31:0] bus_vram_fast_data = (mem_vram_fast_data << {bus_addr[1:0], 3'd0}) >> {3'd4 - bus_wr_bytes, 3'd0};
 
 assign bus_req_adapter = bus_req && !bus_line_match && !bus_line_wait && !bus_wr_direct && !bus_vram_direct && !bus_vram_rd &&
 	                     !bus_rom_match && !bus_rom_first && !wr_split_pend &&
@@ -791,9 +832,10 @@ always @(posedge clk) begin
 	end
 	else if (ce) begin
 		bus_line_ack <= 0;
-		if (!bus_line_ack && (bus_line_match || bus_rom_match)) begin
+		if (!bus_line_ack && (bus_line_match || bus_rom_match || bus_vram_fast)) begin
 			bus_line_ack   <= 1;
-			bus_line_rdata <= bus_rom_match ? bus_rom_data : bus_line_data;
+			bus_line_rdata <= bus_vram_fast ? bus_vram_fast_data :
+			                  bus_rom_match ? bus_rom_data : bus_line_data;
 		end
 	end
 end
@@ -837,6 +879,7 @@ always @(posedge clk) begin
 		b_rdata      <= 0;
 		bus_miss_ack   <= 0;
 		wr_split_pend  <= 0;
+		wr_split_vram  <= 0;
 		bus_miss_rdata <= 0;
 		mem_wp_valid   <= 0;
 		mem_wp_addr    <= 0;
@@ -876,10 +919,19 @@ always @(posedge clk) begin
 		// P214: the spanning store's second longword, ahead of everything
 		if (wr_split_pend) begin
 			wr_split_pend  <= 0;
-			mem_wp_valid   <= 1;
-			mem_wp_addr    <= wr_split_addr;
-			mem_wp_be      <= wr_split_be;
-			mem_wp_data    <= wr_split_data;
+			wr_split_vram  <= 0;
+			if (wr_split_vram) begin
+				mem_vram_wp    <= 1;
+				mem_addr       <= wr_split_addr;
+				mem_be         <= wr_split_be;
+				mem_wdata      <= wr_split_data;
+			end
+			else begin
+				mem_wp_valid   <= 1;
+				mem_wp_addr    <= wr_split_addr;
+				mem_wp_be      <= wr_split_be;
+				mem_wp_data    <= wr_split_data;
+			end
 			bus_miss_ack   <= 1;
 			bus_miss_rdata <= 0;
 		end
@@ -921,7 +973,10 @@ always @(posedge clk) begin
 				reg [31:2] a;
 				reg        wr;
 				dma_turn <= 1;
-				if (bus_first_miss || bus_vram_rd || bus_rom_first) begin
+				if (bus_vram_fast) begin
+					// answered by the line acknowledge above; nothing to launch
+				end
+				else if (bus_first_miss || bus_vram_rd || bus_rom_first) begin
 					svc_walker     <= 0;
 					svc_bus_direct <= 1;
 					svc_addr       <= bus_addr[31:2];
@@ -943,6 +998,7 @@ always @(posedge clk) begin
 					if (bus_wr_span) begin
 						// the tail: the bytes from the next longword's offset 0
 						wr_split_pend <= 1;
+						wr_split_vram <= 0;
 						wr_split_addr <= bus_ram_next[29:0];
 						wr_split_be   <= 4'b1111 << (4'd8 - {1'b0, bus_wr_end});
 						wr_split_data <= bus_wr_left << {3'd4 - {1'b0, bus_addr[1:0]}, 3'd0};
@@ -957,8 +1013,18 @@ always @(posedge clk) begin
 					mem_addr       <= bus_addr[31:2];
 					mem_be         <= (4'b1111 << (3'd4 - bus_wr_bytes)) >> bus_addr[1:0];
 					mem_wdata      <= bus_wr_left >> {bus_addr[1:0], 3'd0};
-					bus_miss_ack   <= 1;
-					bus_miss_rdata <= 0;
+					if (bus_wr_span) begin
+						// the tail: the bytes from the next longword's offset 0
+						wr_split_pend <= 1;
+						wr_split_vram <= 1;
+						wr_split_addr <= bus_addr[31:2] + 30'd1;
+						wr_split_be   <= 4'b1111 << (4'd8 - {1'b0, bus_wr_end});
+						wr_split_data <= bus_wr_left << {3'd4 - {1'b0, bus_addr[1:0]}, 3'd0};
+					end
+					else begin
+						bus_miss_ack   <= 1;
+						bus_miss_rdata <= 0;
+					end
 				end
 				else if (!walker_pend && line_cpu_match) begin
 					b_ack   <= 1;
