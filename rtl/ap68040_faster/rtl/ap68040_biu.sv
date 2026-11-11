@@ -56,7 +56,8 @@
 module ap68040_biu
 	import ap68040_pkg::*;
 #(
-	parameter int NC = 3            // number of requesters, 0 = highest priority
+	parameter int NC = 3,           // number of requesters, 0 = highest priority
+	parameter bit B2B = 1           // start a waiting request at the last TA
 )
 (
 	input  logic              clk,
@@ -376,6 +377,19 @@ always_ff @(posedge clk) begin
 						d_oe <= 1'b0;
 						st   <= S_IDLE;
 						finish_cycle();
+						// Back to back: a request already waiting takes the
+						// bus clock after this TA for its TS, instead of one
+						// S_IDLE clock later.  Only the plain case: we keep
+						// the bus, and no locked sequence, RESET or halt is
+						// involved (those go through S_IDLE as before).
+						if ((B2B != 0) && pick_v && !halt && owner && keep_bus &&
+						    !locked && !cur.lock && !breq[pick_c].lock &&
+						    !unlock && !unlock_pend && !rsto_req && !rsto_pend) begin
+							start = 1'b1;
+							cur   <= breq[pick_c];
+							cur_c <= pick_c;
+							gnt[pick_c] <= 1'b1;
+						end
 					end
 					else begin
 						beat <= beat + 1'd1;
@@ -443,7 +457,7 @@ always_ff @(posedge clk) begin
 			begin
 				logic [NC-1:0] pend;
 				pend = (req & ~gnt) | more;      // (a request lasts a clock past its grant)
-				if (start && st == S_IDLE) pend[pick_c] = 1'b0;
+				if (start && st != S_RETRY) pend[pick_c] = 1'b0;
 				br_n <= halt || !((|pend) || (st == S_RETRY && !start && !drop[cur_c]));
 			end
 		end

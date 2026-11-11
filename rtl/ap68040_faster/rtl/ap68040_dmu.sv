@@ -65,6 +65,8 @@ module ap68040_dmu
 	// cacheable, and the bus's TCI comes too late to stop a speculative read.
 	parameter bit          PA_IO_SERIAL = 0,
 	parameter bit          PA_VRAM_POST = 0,
+	parameter bit          VRD_CHAIN = 1,    // a VRAM read follows a posted store at its grant
+	parameter bit          VRD_NOW = 1,      // ... and answers DC2 in the clock of its done
 	parameter logic [31:0] PA_C0_MASK = 32'h0, PA_C0_MATCH = 32'h0,
 	parameter logic [31:0] PA_C1_MASK = 32'h0, PA_C1_MATCH = 32'h0
 )
@@ -987,6 +989,22 @@ wire dc2_vrd  = PA_VRAM_POST && PA_IO_SERIAL &&
                 !m2.r.lock && !m2.r.pastc && (m2.r.ack == 2'd0) && (m2.r.msz != SZ_Q) &&
                 (m2.x.pa[31:21] == 11'b1111_1001_000) &&
                 !(m3.r.v && m3.r.mem != M_LD) && !(m4.r.v && m4.r.mem != M_LD);
+// The same read, taken straight from a posted store's grant (E_BUS_W): the
+// conditions E_IDLE would test a clock later, with nothing ahead of it.
+wire vrd_chain = (VRD_CHAIN != 0) && dc2_vrd && dc2_slow && !dm_s1 && !kill_now &&
+                 !wfs_p1 && !(mt_v && !mt_done) && !wb_st && !bo_cancel;
+// That read's data reaches DC2 in the clock the BIU reports it done, not
+// through e_ldata a clock later (e_vrd: the job is a dc2_vrd one, so m2.x
+// is already what the engine holds and no fault is possible).  The engine
+// registers the same answer in case DC2 cannot advance now.
+logic        e_vrd;
+wire         vrd_now  = (VRD_NOW != 0) && e_vrd && e_job && !e_kill && !e_flt && !sn_frz &&
+                        (e_st == E_BUS_W) && b_done && !b_err && bo_ingnt &&
+                        bo.rd && !bo.line && (bo.ack == 2'd0) && (bo_left == bo_pn) &&
+                        (e_ret == E_S_BUSD) && m2.r.v && (m2.r.ack == 2'd0) &&
+                        (m2.r.msz != SZ_Q) && !m2.split && !(pbe_r && pv_for == 2'd0);
+wire  [31:0] vrd_data = (e_acc << (8 * e_n)) | (bo_rd << (8 * bo_pn)) |
+                        grab(b_rdata, bo_pn, bo_pa[1:0]);
 // A second slot's load is answered by the fast path or not at all: what
 // would take the engine -- a miss, a noncachable or split access, a table
 // search, a fault -- ends it with a fault at once, which the back end
@@ -1141,7 +1159,7 @@ always_ff @(posedge clk) begin
 		e_job <= 1'b0;
 		m1_stale <= 1'b0;
 		sn_ph <= SN_IDLE; sn_src <= '0; sn_way <= '0; bo_cancel <= 1'b0;
-		bo_ingnt <= 1'b0; sn_pvm <= 1'b0; sn_bom <= 1'b0; post_pend <= 1'b0;
+		bo_ingnt <= 1'b0; sn_pvm <= 1'b0; sn_bom <= 1'b0; post_pend <= 1'b0; e_vrd <= 1'b0;
 		sn_look <= 1'b0; sn_hit <= 1'b0; sn_dirty <= 1'b0;
 		clr_i   <= '0;
 		clr_rst <= 1'b0;
@@ -1347,9 +1365,12 @@ always_ff @(posedge clk) begin
 					bo_left    <= nbytes(m2.r.msz);
 					e_ret      <= E_S_BUSD;
 					e_st       <= E_BUS;
+					e_vrd      <= 1'b1;
 				end
-				else
-					e_st <= E_S_START;
+				else begin
+					e_vrd <= 1'b0;
+					e_st  <= E_S_START;
+				end
 			end
 			else if (iw_req && !iw_done) begin
 				e_ret <= E_I_DONE;
@@ -2113,6 +2134,47 @@ always_ff @(posedge clk) begin
 					// with the platform acknowledging the next clock.
 					post_pend <= 1'b1;
 					e_st      <= E_IDLE;
+					// The frame buffer read waiting in DC2 behind this
+					// store (QuickDraw's read/modify/write loops) is
+					// requested now, without the E_IDLE and E_BUS clocks:
+					// the BIU starts it at the store's TA.  The same
+					// test and the same registers as E_IDLE's dispatch,
+					// plus what E_BUS would have cleared.
+					if (vrd_chain) begin
+						e_kill     <= 1'b0;
+						e_job      <= 1'b1;
+						e_part     <= 1'b0;
+						e_va       <= m2.r.a;
+						e_x        <= m2.x;
+						e_acc      <= '0;
+						e_flt      <= 1'b0;
+						e_fromline <= 1'b0;
+						e_fillhit  <= 1'b0;
+						e_n        <= nbytes(m2.r.msz);
+						sp_dw      <= 1'b0;
+						sp_job     <= 1'b0;
+						bo.line    <= 1'b0;
+						bo.rd      <= 1'b1;
+						bo.tt      <= fc_tt(m2.r.fc);
+						bo.tm      <= fc_tm(m2.r.fc);
+						bo.upa     <= m2.x.upa;
+						bo.ci      <= 1'b1;
+						bo.lock    <= 1'b0;
+						bo.locke   <= 1'b0;
+						bo.ack     <= 2'd0;
+						bo.tln     <= 2'd0;
+						bo_pa      <= m2.x.pa;
+						bo_left    <= nbytes(m2.r.msz);
+						bo_err     <= 1'b0;
+						bo_got     <= 4'd0;
+						bo_tci     <= 1'b0;
+						bo_avec    <= 1'b0;
+						bo_rd      <= '0;
+						e_ret      <= E_S_BUSD;
+						e_breq     <= 1'b1;
+						e_st       <= E_BUS_W;
+						e_vrd      <= 1'b1;
+					end
 				end
 				else
 					bo_ingnt <= 1'b1;
@@ -2166,9 +2228,12 @@ always_ff @(posedge clk) begin
 						bo_rd      <= rd_fin;
 						e_acc      <= (e_acc << (8 * e_n)) | rd_fin;
 						e_ldata    <= (e_acc << (8 * e_n)) | rd_fin;
-						m2.x       <= e_x;
+						// (vrd_now with DC2 advancing: it has its answer,
+						// and m2 may already be the next uop)
+						if (!(vrd_now && adv_dc2)) m2.x <= e_x;
 						e_job      <= 1'b0;
-						e_dc2_done <= !e_kill;
+						e_dc2_done <= !e_kill && !(vrd_now && adv_dc2);
+						e_vrd      <= 1'b0;
 						steal      <= 1'b0;
 						e_st       <= E_IDLE;
 						// synthesis translate_off
@@ -2638,15 +2703,15 @@ assign tw_busy = (e_st == E_TW_START) || (e_st == E_TW_DESC) || (e_st == E_TW_DE
 
 // DC2 answer
 // once the engine has taken the DC2 uop, only its completion releases it
-assign dc2_rdy = !m2.r.v || e_dc2_done || s1_rep || (!e_job && (fast_now || st_simple));
-assign ldata   = e_dc2_done ? e_ldata : fast_data;
+assign dc2_rdy = !m2.r.v || e_dc2_done || s1_rep || (!e_job && (fast_now || st_simple)) || vrd_now;
+assign ldata   = vrd_now ? vrd_data : e_dc2_done ? e_ldata : fast_data;
 // for AG's capture of a load into a base or index (a short path): the long
 // word of the line the address points at -- the operand itself for an
 // aligned long or an even word (in the low half), else not offered
 wire [31:0] al_word = dq2[63:32];
-assign ldata_al  = e_dc2_done ? e_ldata :
+assign ldata_al  = vrd_now ? vrd_data : e_dc2_done ? e_ldata :
                    (m2.r.msz == SZ_W) ? {16'd0, m2.r.a[1] ? al_word[15:0] : al_word[31:16]} : al_word;
-assign ldata_alv = e_dc2_done ||
+assign ldata_alv = e_dc2_done || vrd_now ||
                    (m2.r.msz == SZ_L && m2.r.a[1:0] == 2'd0) ||
                    (m2.r.msz == SZ_W && !m2.r.a[0]);
 assign fault   = (e_dc2_done && e_flt) || s1_rep;

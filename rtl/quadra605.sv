@@ -216,6 +216,7 @@ wire  [1:0] bus_size;
 wire [31:0] bus_addr, bus_wdata;
 wire  [2:0] bus_fc;
 wire        bus_ack;
+wire        bus_vram_wr_now;
 wire [31:0] bus_rdata;
 wire        bus_ack_adapter;
 wire [31:0] bus_rdata_adapter;
@@ -226,7 +227,7 @@ reg  [31:0] bus_line_rdata;
 reg         bus_miss_ack;
 reg  [31:0] bus_miss_rdata;
 
-assign bus_ack   = bus_line_ack || bus_miss_ack || bus_ack_adapter;
+assign bus_ack   = bus_line_ack || bus_miss_ack || bus_ack_adapter || bus_vram_wr_now;
 assign bus_rdata = bus_line_ack ? bus_line_rdata :
 	               bus_miss_ack ? bus_miss_rdata : bus_rdata_adapter;
 
@@ -844,6 +845,19 @@ wire cpu_want = walker_pend || bus_first_miss || bus_wr_direct || bus_vram_direc
                 (b_req && !b_ack && !cpu_berr && !line_cpu_wait);
 wire dma_take = (SONIC != 0) && dma_req && !dma_ack && !walker_pend &&
                 (dma_turn || !cpu_want);
+// A VRAM write inside one longword is acknowledged in the clock it is
+// taken (the strobe below is registered as before), so the bus is free
+// for the read behind it a clock sooner: QuickDraw's read/modify/write
+// loops wait for exactly this.  A spanning write keeps the registered
+// acknowledge of its second half.  This needs the store buffer in
+// quadra_cpu040: it holds the acknowledge of an unbuffered write, which
+// arrives in the CPU's TS clock, for the clock TA is sampled in.
+`ifdef AP040_STORE_BUFFER_OFF
+localparam VRAM_WR_NOW = 0;
+`else
+localparam VRAM_WR_NOW = 1;
+`endif
+assign bus_vram_wr_now = (VRAM_WR_NOW != 0) && bus_vram_direct && !bus_wr_span && !dma_take;
 
 assign dbg_berr      = (svc == S_BERR);
 assign dbg_berr_addr = {svc_addr, 2'b00};
@@ -976,6 +990,11 @@ always @(posedge clk) begin
 				if (bus_vram_fast) begin
 					// answered by the line acknowledge above; nothing to launch
 				end
+				else if (bus_vram_rd && mem_vram_wp) begin
+					// a read of the longword the write strobe is landing in:
+					// the line cache answers it next clock (a fast hit),
+					// where S_MEM would take four
+				end
 				else if (bus_first_miss || bus_vram_rd || bus_rom_first) begin
 					svc_walker     <= 0;
 					svc_bus_direct <= 1;
@@ -1021,10 +1040,11 @@ always @(posedge clk) begin
 						wr_split_be   <= 4'b1111 << (4'd8 - {1'b0, bus_wr_end});
 						wr_split_data <= bus_wr_left << {3'd4 - {1'b0, bus_addr[1:0]}, 3'd0};
 					end
-					else begin
+					else if (VRAM_WR_NOW == 0) begin
 						bus_miss_ack   <= 1;
 						bus_miss_rdata <= 0;
 					end
+					// (otherwise acknowledged now: bus_vram_wr_now)
 				end
 				else if (!walker_pend && line_cpu_match) begin
 					b_ack   <= 1;

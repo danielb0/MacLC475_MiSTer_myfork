@@ -408,8 +408,12 @@ wire [31:0] hit_word = mem_addr[2] ? hit_data[63:32] : hit_data[31:0];
 // The fast port: the same lookup on the CPU's bus address, combinational,
 // so the machine can register its acknowledge in the clock the request
 // appears.  The rules are those of a hit above; a read that misses here
-// comes back as mem_req.  Not on a write's clock: the write is older than
-// the read in bus order and lands in the line at the clock edge.
+// comes back as mem_req.  Not on the clock of a write to the same longword:
+// the write is older than the read in bus order and lands in the line at
+// the clock edge.  A write to any other longword leaves this one's bytes
+// and their valid bits alone, so the read is answered beside it (the
+// machine acknowledges a queued write and takes the next read in
+// consecutive clocks).
 wire [14:0] fast_tag  = fast_addr[19:5];
 wire  [1:0] fast_beat = fast_addr[4:3];
 wire  [4:0] fast_half = {fast_beat, fast_addr[2], 2'b00};
@@ -424,7 +428,7 @@ wire [63:0] fast_beat_data = fast_way_0 ? rd_cache_line_0[fast_beat] :
                              fast_way_2 ? rd_cache_line_2[fast_beat] :
                                           rd_cache_line_3[fast_beat];
 assign fast_hit  = (fast_way_0 || fast_way_1 || fast_way_2 || fast_way_3) &&
-                   !cpu_vram_write;
+                   !(cpu_vram_write && (mem_addr[19:2] == fast_addr[19:2]));
 assign fast_data = fast_addr[2] ? fast_beat_data[63:32] : fast_beat_data[31:0];
 
 // DDR3 Request & Arbitration FSM States

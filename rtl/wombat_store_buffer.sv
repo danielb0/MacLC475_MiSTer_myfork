@@ -57,6 +57,7 @@ reg  [2:0] count;
 reg        accept_ack;
 reg        drain_active;
 reg        direct_active;
+reg        direct_early;
 
 reg        q0_instr, q1_instr, q2_instr, q3_instr;
 reg  [1:0] q0_size,  q1_size, q2_size, q3_size;
@@ -113,7 +114,8 @@ endfunction
 wire pass_ok = (ENABLE != 0) && s_req && !s_write && !buffer_req &&
                (count == 2'd1) && (s_addr[31:4] != q0_addr[31:4]) &&
                !xfer_cross(q0_addr[3:0], q0_size) && !xfer_cross(s_addr[3:0], s_size);
-wire direct_request = s_req && !buffer_req && ((count == 0) || pass_ok) && !drain_active;
+wire direct_request = s_req && !buffer_req && ((count == 0) || pass_ok) && !drain_active &&
+                      !direct_early;
 
 assign pending = (count != 0);
 // A posted write is acknowledged in its capture cycle: nothing upstream
@@ -125,8 +127,13 @@ assign pending = (count != 0);
 // the MMU lookup in its cone (the fitted worst path, ifr_addr -> MMU ->
 // buffer_req -> c_ack -> branch-refill seed, 2026-09-25).  For a write the
 // choice is unchanged; a read is never buffer_req.
+// A frame buffer write that goes direct (not buffered: the overlay, a
+// locked sequence) is acknowledged by the platform in its first clock,
+// which is the CPU's TS clock: TA is not sampled there.  direct_early holds
+// that acknowledge for the next clock and keeps the request from being
+// presented twice; direct_active is not set then.
 assign s_ack   = s_write ? (buffer_req ? (accept_ack | (push & s_posted)) :
-                            (direct_active ? m_ack : 1'b0)) :
+                            (direct_active ? m_ack : direct_early)) :
                  (direct_active ? m_ack : 1'b0);
 assign s_rdata = m_rdata;
 
@@ -141,6 +148,7 @@ assign m_fc    = drain_active ? q0_fc    : s_fc;
 always @(posedge clk) begin
 	if (!nreset) begin
 		count         <= 0;
+		direct_early  <= 0;
 		accept_ack    <= 0;
 		drain_active  <= 0;
 		direct_active <= 0;
@@ -152,6 +160,7 @@ always @(posedge clk) begin
 	end
 	else if (ce) begin
 		accept_ack <= 0;
+		direct_early <= direct_request && s_write && vram_window && m_ack && !direct_active;
 		// a posted write was acknowledged in its capture cycle; the
 		// requester has moved on, so no held-request guard is needed
 		if (push) accept_ack <= !s_posted;
@@ -290,6 +299,11 @@ always @(posedge clk) begin
 		end
 		else if (!direct_active && (count != 0) && !direct_request &&
 		         !m_ack && !m_err)
+			drain_active <= 1;
+		// a write captured into an empty queue starts draining in the next
+		// clock, not the one after: the read behind it (a frame buffer
+		// read/modify/write loop) waits for exactly this drain
+		else if (!direct_active && push && !m_ack && !m_err)
 			drain_active <= 1;
 
 		if (direct_active) begin
