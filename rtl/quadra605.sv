@@ -167,6 +167,8 @@ module quadra605
 	input         perf_clear,
 	input         perf_freeze,
 	input  [11:0] perf_vram_ev,
+	input   [5:0] perf_rd_idx,        // one counter by number, for the DDR3
+	output [31:0] perf_rd_data,       // snapshot (MacLC475.sv perf_ddr_*)
 	input  [15:0] video_platform_status,
 
 	// built-in Ethernet: the OSD switch (latched under reset by the top) and the
@@ -391,7 +393,8 @@ wombat_cpu #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 	.debug_instruction_pc(cpu_instruction_pc),
 	.perf_clear(perf_clear), .perf_freeze(perf_freeze), .perf_page(perf_page),
 	.perf_vram_ev(perf_vram_ev),
-	.perf_rows(perf_rows)
+	.perf_rows(perf_rows),
+	.perf_rd_idx(perf_rd_idx), .perf_rd_data(perf_rd_data)
 );
 
 `ifdef CPU_AP68040

@@ -593,6 +593,8 @@ wire [20:0] vid_line_addr;
 wire        vid_line_swap;
 wire        vram_wq_room;
 wire [11:0] vram_perf_ev;                  // rtl/perf_counters.sv pages 5-6
+wire  [5:0] perf_rd_idx;                   // DDR3 perf snapshot (perf_ddr_*)
+wire [31:0] perf_rd_data;
 wire [31:2] vram_fast_addr;                // vram_ddr3's fast read-hit port
 wire        vram_fast_take;
 wire        vram_fast_hit;
@@ -769,6 +771,7 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.perf_show(perf_show), .perf_page(perf_page),
 	.perf_clear(perf_clear), .perf_freeze(perf_freeze),
 	.perf_vram_ev(vram_perf_ev),
+	.perf_rd_idx(perf_rd_idx), .perf_rd_data(perf_rd_data),
 	.video_platform_status({8'h60, rom_loaded, pll_locked, pll_video_locked, pix_quiet,
 	                       pram_ready, cuda_storage_ready, cuda_reset_n, reset}),
 
@@ -1330,6 +1333,80 @@ reg         ddr_rd_beat1;                  // the line's first 64-bit beat is in
 reg        ddr_wait_eth = 1'b0;            // ... for the Ethernet window instead
 assign     eth_mem_rvalid = ddr_wait_eth && DDRAM_DOUT_READY;
 
+// Perf counter snapshot (debug builds): every 2^18 clocks (10.5 ms) the 42
+// counters of rtl/perf_counters.sv are copied to DDR3 at ARM physical
+// 0x27F00000, for support/perf/perflog.py to read over SSH via /dev/mem.  23
+// little-endian 64-bit words:
+//   word 0       {seq, "PERF" 0x50455246}   written first
+//   words 1-21   {counter 2k+1, counter 2k} for k = 0..20
+//   word 22      {seq, ~0x50455246}         written last
+// A reader that finds the two seq fields equal has a whole snapshot.  The
+// counters are read one per clock while the copy runs, so a snapshot spans a
+// few microseconds; nothing is cleared or frozen.  Writes go after every
+// other DDR3 client, one beat each.
+localparam [28:0] DDR_PERF_BASE = 29'h04FE_0000;  // byte 0x27F0_0000 >> 3
+localparam [31:0] PERF_MAGIC    = 32'h5045_5246;
+`ifdef MACLC475_DEBUG
+localparam PERF_DDR = 1;
+`else
+localparam PERF_DDR = 0;
+`endif
+reg [17:0] perf_ddr_tick = 18'd0;
+reg [31:0] perf_ddr_seq = 32'd0;
+reg        perf_ddr_busy = 1'b0;
+reg  [4:0] perf_ddr_word = 5'd0;           // 0-22
+reg  [1:0] perf_ddr_phase = 2'd0;
+reg  [5:0] perf_ddr_idx = 6'd0;
+reg [31:0] perf_ddr_lo = 32'd0;
+reg        perf_ddr_req = 1'b0;
+reg [63:0] perf_ddr_data = 64'd0;
+reg        perf_ddr_accept = 1'b0;         // arbiter took the beat (pulse)
+assign     perf_rd_idx = perf_ddr_idx;
+
+always @(posedge clk_sys) begin
+	perf_ddr_tick <= perf_ddr_tick + 1'b1;
+	if (perf_ddr_accept) begin
+		perf_ddr_req <= 1'b0;
+		if (perf_ddr_word == 5'd22) perf_ddr_busy <= 1'b0;
+		else perf_ddr_word <= perf_ddr_word + 1'b1;
+	end
+	else if (!perf_ddr_busy) begin
+		if (PERF_DDR && perf_ddr_tick == 18'd0) begin
+			perf_ddr_busy  <= 1'b1;
+			perf_ddr_seq   <= perf_ddr_seq + 1'b1;
+			perf_ddr_word  <= 5'd0;
+			perf_ddr_phase <= 2'd0;
+		end
+	end
+	else if (!perf_ddr_req) begin
+		case (perf_ddr_phase)
+		2'd0:
+			if (perf_ddr_word == 5'd0) begin
+				perf_ddr_data <= {perf_ddr_seq, PERF_MAGIC};
+				perf_ddr_req  <= 1'b1;
+			end
+			else if (perf_ddr_word == 5'd22) begin
+				perf_ddr_data <= {perf_ddr_seq, ~PERF_MAGIC};
+				perf_ddr_req  <= 1'b1;
+			end
+			else begin
+				perf_ddr_idx   <= {perf_ddr_word - 1'b1, 1'b0};
+				perf_ddr_phase <= 2'd1;
+			end
+		2'd1: begin
+			perf_ddr_lo    <= perf_rd_data;
+			perf_ddr_idx   <= perf_ddr_idx + 1'b1;
+			perf_ddr_phase <= 2'd2;
+		end
+		default: begin
+			perf_ddr_data  <= {perf_rd_data, perf_ddr_lo};
+			perf_ddr_req   <= 1'b1;
+			perf_ddr_phase <= 2'd0;
+		end
+		endcase
+	end
+end
+
 // 128 KB on-chip ROM cache (lean Q800): a hit answers in two clocks with
 // no DDR3 trip, so ROM code no longer queues behind the VRAM line DMA.
 // Invalidated on every reset, which a boot0.rom download holds.
@@ -1365,6 +1442,7 @@ rom_cache_128k rom_cache (
 always @(posedge clk_sys) begin
 	mem_ack_r <= 0;
 	eth_mem_accept <= 0;
+	perf_ddr_accept <= 0;
 	vram_rd_ack <= 0;
 	rom_cache_fill_we <= 0;
 
@@ -1507,6 +1585,15 @@ always @(posedge clk_sys) begin
 			ddram_rd       <= !eth_mem_we;
 			ddr_wait_eth   <= !eth_mem_we;
 			eth_mem_accept <= 1;
+		end
+		// the perf snapshot, behind everything: 23 single beats per 10.5 ms
+		else if (perf_ddr_req && !perf_ddr_accept) begin
+			ddram_addr      <= DDR_PERF_BASE | {24'd0, perf_ddr_word};
+			ddram_din       <= perf_ddr_data;
+			ddram_be        <= 8'hFF;
+			ddram_burstcnt  <= 8'd1;
+			ddram_we        <= 1;
+			perf_ddr_accept <= 1;
 		end
 		// RAM beats are sdram_beat32's; nothing here gates them, so a RAM
 		// access never waits on the DDR3 side of this block.

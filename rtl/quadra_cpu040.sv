@@ -75,7 +75,9 @@ module quadra_cpu040
 	input         perf_freeze,
 	input   [2:0] perf_page,
 	input  [11:0] perf_vram_ev,
-	output [223:0] perf_rows
+	output [223:0] perf_rows,
+	input   [5:0] perf_rd_idx,
+	output [31:0] perf_rd_data
 );
 
 wire [31:0] c_a, c_do;
@@ -178,7 +180,8 @@ perf_counters perf (
 	.c_instr(cpu_bus_instr), .c_addr(cpu_bus_addr),
 	.m_req(bus_req), .m_ack(bus_ack), .vram_ev(perf_vram_ev),
 	.row1(perf_rows[223:160]), .row2(perf_rows[159:128]),
-	.row3(perf_rows[127:64]), .row4(perf_rows[63:0])
+	.row3(perf_rows[127:64]), .row4(perf_rows[63:0]),
+	.rd_idx(perf_rd_idx), .rd_data(perf_rd_data)
 );
 
 assign walker_req     = 1'b0;

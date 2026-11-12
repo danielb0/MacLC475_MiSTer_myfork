@@ -29,6 +29,10 @@
 //         tag, reads acked from another line's beat (must be 0), read-wait
 //         cycles under another line's fill tail
 //
+// rd_idx/rd_data read any one counter by number (0-41, page * 6 + slot) for
+// the DDR3 snapshot (MacLC475.sv perf_ddr_*): no clear or freeze needed,
+// the reader differences successive snapshots.
+//
 // The CPU side is the CPU's own bus, before the store buffer: a request
 // cycle there is a cycle the CPU's bus unit waits.  Beats are acked
 // longwords; a line fill is four.
@@ -50,7 +54,10 @@ module perf_counters (
 	output     [63:0] row1,
 	output     [31:0] row2,
 	output     [63:0] row3,
-	output     [63:0] row4
+	output     [63:0] row4,
+
+	input       [5:0] rd_idx,
+	output     [31:0] rd_data
 );
 
 localparam N = 42;
@@ -116,5 +123,7 @@ assign row1 = {cnt[base], cnt[base + 6'd1]};
 assign row2 = {12'hC00, 1'b0, pg, 3'd0, freeze, 3'd0, ovf, 8'h00};
 assign row3 = {cnt[base + 6'd2], cnt[base + 6'd3]};
 assign row4 = {cnt[base + 6'd4], cnt[base + 6'd5]};
+
+assign rd_data = (rd_idx < N) ? cnt[rd_idx] : 32'd0;
 
 endmodule

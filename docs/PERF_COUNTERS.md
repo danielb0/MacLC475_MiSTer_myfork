@@ -1,8 +1,18 @@
 # Perf counters (debug builds)
 
-`rtl/perf_counters.sv` keeps 42 free-running 32-bit counters at the 25 MHz machine clock (wrap after about 171 s). They need a `MACLC475_DEBUG` build and are read through the DAFB hex overlay. The sim profile (`tests/run_cpu040.sh profile`) cross-checks them against its own bus counts and prints all seven pages.
+`rtl/perf_counters.sv` keeps 42 free-running 32-bit counters at the 25 MHz machine clock (wrap after about 171 s). They need a `MACLC475_DEBUG` build. The core copies all 42 to DDR3 every 10.5 ms, where an SSH script reads them; the DAFB hex overlay shows them on screen too. The sim profile (`tests/run_cpu040.sh profile`) cross-checks them against its own bus counts and prints all seven pages.
 
-## Taking a measurement
+## Taking a measurement (SSH, no OSD)
+
+Every 2^18 clocks the core writes a snapshot of all counters to DDR3 at ARM physical `0x27F00000` (layout in `MacLC475.sv`, `DDR_PERF_BASE`). Nothing has to be cleared, frozen or paged.
+
+1. Start the logger from the PC; it samples once a second and the CSV lands on the PC: `ssh mister-bedroom python3 -u - < scripts/perflog.py > capture.csv`
+2. Let it record a few seconds of idle, run the test normally, let it record a few seconds of idle again, then stop the ssh.
+3. `python scripts/perf_report.py capture.csv` prints a per-second timeline, finds the busy stretch (VRAM traffic over 4x the median; `--metric NAME` picks another counter, `--from S --to S` sets it by hand) and prints every counter's total and rate in that window, the idle rate outside it, and the derived figures below.
+
+The perf counters in the OSD (Clear, Freeze) still act on the same counters: don't use them during a capture, the report will flag the jump.
+
+## Taking a measurement (overlay)
 
 1. OSD, Debug page: set `Perf counting` to Run, then press `Clear perf counters`.
 2. Close the OSD and start the test right away (Speedometer Graphics). Time spent idling before the test is counted too; to correct for it, measure an idle stretch of known length the same way.
