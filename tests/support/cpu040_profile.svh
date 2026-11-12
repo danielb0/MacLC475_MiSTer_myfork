@@ -265,6 +265,12 @@ task automatic run_profile;
         end
         wait (dut.cpu_instruction_pc == done_pc);
         repeat (40) @(negedge clk);
+`ifdef VRAM_DDR3
+        // the checks below read the DDR3 model: let the write FIFO drain
+        // first (a normal drain waits behind a scanline fetch's bursts)
+        wait (vram_inst.fifo_count == 0 && vram_inst.state == 0);
+        @(negedge clk);
+`endif
         // four VRAM-writing loops (cases 4-7), 256 stores each
         if (profile_beats[4] - run_vram_w != 1024)
             $fatal(1, "Profile VRAM write beats %0d, expected 1024", profile_beats[4] - run_vram_w);

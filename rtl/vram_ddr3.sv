@@ -340,6 +340,13 @@ reg [31:0] rd_cache_val_0 = 32'd0, rd_cache_val_1 = 32'd0;
 reg [31:0] rd_cache_val_2 = 32'd0, rd_cache_val_3 = 32'd0;
 reg  [1:0] rd_victim = 2'd0;
 reg  [1:0] rd_burst_beat;
+// the prefetch buffer, a fifth line only prefetches fill (see PREFETCH below)
+reg [14:0] pb_tag   = 15'd0;
+reg [63:0] pb_line [0:3];
+reg [31:0] pb_val   = 32'd0;
+reg        pb_used  = 1'b0;    // a read has been answered from pb
+reg        pb_fresh = 1'b0;    // filled by a prefetch, not read yet (perf)
+reg        fill_pb  = 1'b0;    // the fill in flight targets pb
 
 wire [14:0] cur_rd_tag  = cpu_w64_addr[16:2];
 wire  [1:0] cur_rd_beat = cpu_w64_addr[1:0];
@@ -355,7 +362,8 @@ wire hit_way_3 = (&rd_cache_val_3[cur_rd_half +: 4]) && (rd_cache_tag_3 == cur_r
 // either invalid or already holds that write's data (the write updates the
 // held line), and a fill is only issued once the FIFO holds nothing for the
 // line (line_conflict below).
-wire rd_cache_hit = hit_way_0 || hit_way_1 || hit_way_2 || hit_way_3;
+wire hit_pb    = (&pb_val[cur_rd_half +: 4])         && (pb_tag         == cur_rd_tag);
+wire rd_cache_hit = hit_way_0 || hit_way_1 || hit_way_2 || hit_way_3 || hit_pb;
 
 // A fill is issued only when the FIFO holds no write for the 32-byte line
 // being read: 16 tag compares, the same scan the old per-word check did.
@@ -397,16 +405,30 @@ wire        fill_mine    = (cur_rd_tag == fill_tag);
 // after the last one filled (capture of 2026-11-12): QuickDraw walks a row
 // of VRAM 32 bytes at a time.  Every VRAM read of line N asks for line N+1
 // (pf_want, pf_tag), and when the bus is free and no demand read waits,
-// N+1 is fetched into the next way like a demand fill.  It is skipped when
-// a way already holds that tag, or the write FIFO holds a write for it
-// (same rule as a demand fill: the fill must not predate a queued write).
+// N+1 is fetched like a demand fill.  It is skipped when the cache already
+// holds that tag, or the write FIFO holds a write for it (same rule as a
+// demand fill: the fill must not predate a queued write).
+//
+// A prefetch lands in its own line, the prefetch buffer (pb_*), not in a
+// way: filling the next way evicted lines still in use, and with a source
+// and a destination stream only 56 % of prefetches were used (A14).  The
+// buffer is looked up like a fifth way.  Once a read has used it (pb_used),
+// the next prefetch moves it into the victim way before refilling it, so
+// a line enters the four ways only after it has proved useful.
+//
+// PF_SEQ: prefetch N+1 only while N-1 is still held, i.e. once a walk is
+// under way, so lone reads do not spend DDR3 time on lines never read.
 localparam PREFETCH = 1'b1;
+localparam PF_SEQ   = 1'b1;
 reg         pf_want = 1'b0;
 reg  [14:0] pf_tag  = 15'd0;
-wire        pf_held = (pf_tag == rd_cache_tag_0) ||
-                      (pf_tag == rd_cache_tag_1) ||
-                      (pf_tag == rd_cache_tag_2) ||
-                      (pf_tag == rd_cache_tag_3);
+function tag_held(input [14:0] t);
+	tag_held = (t == rd_cache_tag_0) || (t == rd_cache_tag_1) ||
+	           (t == rd_cache_tag_2) || (t == rd_cache_tag_3) ||
+	           (t == pb_tag);
+endfunction
+wire        pf_held = tag_held(pf_tag);
+wire        pf_seq  = !PF_SEQ || tag_held(pf_tag - 15'd2);
 reg pf_conflict;
 integer p_i;
 always @(*) begin
@@ -429,7 +451,8 @@ endfunction
 wire [63:0] hit_data = hit_way_0 ? rd_cache_line_0[cur_rd_beat] :
                        hit_way_1 ? rd_cache_line_1[cur_rd_beat] :
                        hit_way_2 ? rd_cache_line_2[cur_rd_beat] :
-                                   rd_cache_line_3[cur_rd_beat];
+                       hit_way_3 ? rd_cache_line_3[cur_rd_beat] :
+                                   pb_line[cur_rd_beat];
 wire [31:0] hit_word = mem_addr[2] ? hit_data[63:32] : hit_data[31:0];
 
 // The fast port: the same lookup on the CPU's bus address, combinational,
@@ -449,12 +472,14 @@ wire fast_way_0 = (&rd_cache_val_0[fast_half +: 4]) && (rd_cache_tag_0 == fast_t
 wire fast_way_1 = (&rd_cache_val_1[fast_half +: 4]) && (rd_cache_tag_1 == fast_tag);
 wire fast_way_2 = (&rd_cache_val_2[fast_half +: 4]) && (rd_cache_tag_2 == fast_tag);
 wire fast_way_3 = (&rd_cache_val_3[fast_half +: 4]) && (rd_cache_tag_3 == fast_tag);
+wire fast_pb    = (&pb_val[fast_half +: 4])         && (pb_tag         == fast_tag);
 
 wire [63:0] fast_beat_data = fast_way_0 ? rd_cache_line_0[fast_beat] :
                              fast_way_1 ? rd_cache_line_1[fast_beat] :
                              fast_way_2 ? rd_cache_line_2[fast_beat] :
-                                          rd_cache_line_3[fast_beat];
-assign fast_hit  = (fast_way_0 || fast_way_1 || fast_way_2 || fast_way_3) &&
+                             fast_way_3 ? rd_cache_line_3[fast_beat] :
+                                          pb_line[fast_beat];
+assign fast_hit  = (fast_way_0 || fast_way_1 || fast_way_2 || fast_way_3 || fast_pb) &&
                    !(cpu_vram_write && (mem_addr[19:2] == fast_addr[19:2]));
 assign fast_data = fast_addr[2] ? fast_beat_data[63:32] : fast_beat_data[31:0];
 
@@ -516,22 +541,27 @@ always @(posedge clk_sys) begin
 	end
 end
 
-// Prefetch accounting (perf events 9 and 10).  pf_mark[w]: way w was filled
-// by a prefetch and no read has used it yet.  The first read answered from
-// such a way, by a hit on either port or by one of its fill beats, counts
-// as a used prefetch and clears the mark.
-reg   [3:0] pf_mark = 4'd0;
+// Prefetch buffer use.  pb_use: a read is answered from pb this clock, by
+// a hit on either port (the ways win a tie in the data muxes, so only when
+// no way hits) or by one of pb's fill beats.  It sets pb_used, which lets
+// the next prefetch promote the line; the first use after a prefetch also
+// counts as a used prefetch (perf event 10, pb_fresh).
 wire        pe_rd_hit   = mem_req && mem_is_vram && !mem_write && !vram_ack &&
                           rd_cache_hit;
-wire  [3:0] pe_hit_ways = pe_rd_hit ? {hit_way_3, hit_way_2, hit_way_1, hit_way_0} :
-                          fast_take ? {fast_way_3, fast_way_2, fast_way_1, fast_way_0} :
-                                      4'd0;
+wire        pe_hit_pb   = pe_rd_hit ? (hit_pb &&
+                                       !(hit_way_0 || hit_way_1 || hit_way_2 || hit_way_3)) :
+                          fast_take ? (fast_pb &&
+                                       !(fast_way_0 || fast_way_1 || fast_way_2 || fast_way_3)) :
+                                      1'b0;
 wire        pe_fill_ack = !reset && cpu_rd_pend && fill_mine && vram_ddr_rvalid &&
                           (((state == S_CPU_READ) && vram_ddr_ack &&
                             (cur_rd_beat == 2'd0)) ||
                            ((state == S_CPU_DATA) && (cur_rd_beat == rd_burst_beat)));
-wire  [3:0] pe_pf_ways  = pf_mark & (pe_hit_ways |
-                          (pe_fill_ack ? (4'd1 << rd_victim) : 4'd0));
+wire        pb_use      = pe_hit_pb || (pe_fill_ack && fill_pb);
+
+// S_IDLE branch 2b's condition, shared with its perf event
+wire        pf_go       = PREFETCH && pf_want && !cpu_rd_pend && !cpu_vram_write &&
+                          !pf_held && !pf_conflict && pf_seq;
 
 //----------------------------------------------------------------------------
 // DDR3 Request & Arbitration FSM
@@ -564,7 +594,10 @@ always @(posedge clk_sys) begin
 		line_req_held   <= 1'b0;
 		dma_wait        <= 8'd0;
 		pf_want         <= 1'b0;
-		pf_mark         <= 4'd0;
+		pb_val          <= 32'd0;
+		pb_used         <= 1'b0;
+		pb_fresh        <= 1'b0;
+		fill_pb         <= 1'b0;
 	end
 	else begin
 		// prefetch bookkeeping: a VRAM read of line N asks for N+1 (the
@@ -580,7 +613,10 @@ always @(posedge clk_sys) begin
 		end
 		else if (pf_want && pf_held && (state == S_IDLE))
 			pf_want <= 1'b0;
-		pf_mark <= pf_mark & ~pe_pf_ways;
+		if (pb_use) begin
+			pb_used  <= 1'b1;
+			pb_fresh <= 1'b0;
+		end
 
 		// Normal write handshake with quadra800 bus
 		if (mem_req && mem_is_vram && mem_write) begin
@@ -603,8 +639,16 @@ always @(posedge clk_sys) begin
 		if (cpu_vram_write) begin
 			if (fill_active && (cur_rd_tag == fill_tag))
 				fill_wr_mask[{cur_rd_beat, 3'b000} +: 8] <= fill_wr_mask[{cur_rd_beat, 3'b000} +: 8] | cpu_w64_be;
+			if (cur_rd_tag == pb_tag) begin
+				if (fill_active && fill_pb)
+					pb_val[{cur_rd_beat, 3'b000} +: 8] <= pb_val[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
+				else begin
+					pb_line[cur_rd_beat] <= wr_merge(pb_line[cur_rd_beat]);
+					pb_val[{cur_rd_beat, 3'b000} +: 8] <= pb_val[{cur_rd_beat, 3'b000} +: 8] | cpu_w64_be;
+				end
+			end
 			if (cur_rd_tag == rd_cache_tag_0) begin
-				if (fill_active && rd_victim == 2'd0)
+				if (fill_active && !fill_pb && rd_victim == 2'd0)
 					rd_cache_val_0[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_0[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
 				else begin
 					rd_cache_line_0[cur_rd_beat] <= wr_merge(rd_cache_line_0[cur_rd_beat]);
@@ -612,7 +656,7 @@ always @(posedge clk_sys) begin
 				end
 			end
 			if (cur_rd_tag == rd_cache_tag_1) begin
-				if (fill_active && rd_victim == 2'd1)
+				if (fill_active && !fill_pb && rd_victim == 2'd1)
 					rd_cache_val_1[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_1[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
 				else begin
 					rd_cache_line_1[cur_rd_beat] <= wr_merge(rd_cache_line_1[cur_rd_beat]);
@@ -620,7 +664,7 @@ always @(posedge clk_sys) begin
 				end
 			end
 			if (cur_rd_tag == rd_cache_tag_2) begin
-				if (fill_active && rd_victim == 2'd2)
+				if (fill_active && !fill_pb && rd_victim == 2'd2)
 					rd_cache_val_2[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_2[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
 				else begin
 					rd_cache_line_2[cur_rd_beat] <= wr_merge(rd_cache_line_2[cur_rd_beat]);
@@ -628,7 +672,7 @@ always @(posedge clk_sys) begin
 				end
 			end
 			if (cur_rd_tag == rd_cache_tag_3) begin
-				if (fill_active && rd_victim == 2'd3)
+				if (fill_active && !fill_pb && rd_victim == 2'd3)
 					rd_cache_val_3[{cur_rd_beat, 3'b000} +: 8] <= rd_cache_val_3[{cur_rd_beat, 3'b000} +: 8] & ~cpu_w64_be;
 				else begin
 					rd_cache_line_3[cur_rd_beat] <= wr_merge(rd_cache_line_3[cur_rd_beat]);
@@ -699,7 +743,7 @@ always @(posedge clk_sys) begin
 				2'd3: begin rd_cache_tag_3 <= cur_rd_tag; rd_cache_val_3 <= 32'd0; end
 				endcase
 				fill_tag          <= cur_rd_tag;
-				pf_mark[rd_victim] <= 1'b0;
+				fill_pb           <= 1'b0;
 				fill_wr_mask      <= 32'd0;
 				rd_burst_beat     <= 2'd0;
 				state             <= S_CPU_READ;
@@ -713,24 +757,40 @@ always @(posedge clk_sys) begin
 				drain_beats_rem   <= burst_beats;
 				state             <= S_CPU_WRITE;
 			end
-			// 2b. Next-line prefetch: a fill like branch 1's, for pf_tag.
-			// Not with a read pending (branch 1 or 2 owns that clock), not
-			// on a write's clock (that write is not in the FIFO yet), and
-			// not for a line a way already holds.
-			else if (PREFETCH && pf_want && !cpu_rd_pend && !cpu_vram_write &&
-			         !pf_held && !pf_conflict) begin
+			// 2b. Next-line prefetch into pb (pf_go): a fill like branch
+			// 1's, for pf_tag.  Not with a read pending (branch 1 or 2 owns
+			// that clock), not on a write's clock (that write is not in the
+			// FIFO yet, and the promotion below copies pb as it stands), and
+			// not for a line already held.  A pb line a read has used moves
+			// into the victim way first; an unused one is dropped.
+			else if (pf_go) begin
 				vram_ddr_req      <= 1'b1;
 				vram_ddr_we       <= 1'b0;
 				vram_ddr_addr     <= DDR_VRAM_BASE + {12'd0, pf_tag, 2'b00};
 				vram_ddr_burstcnt <= 8'd4;
-				case (rd_victim)
-				2'd0: begin rd_cache_tag_0 <= pf_tag; rd_cache_val_0 <= 32'd0; end
-				2'd1: begin rd_cache_tag_1 <= pf_tag; rd_cache_val_1 <= 32'd0; end
-				2'd2: begin rd_cache_tag_2 <= pf_tag; rd_cache_val_2 <= 32'd0; end
-				2'd3: begin rd_cache_tag_3 <= pf_tag; rd_cache_val_3 <= 32'd0; end
-				endcase
+				if (pb_used || pb_use) begin
+					case (rd_victim)
+					2'd0: begin rd_cache_tag_0 <= pb_tag; rd_cache_val_0 <= pb_val;
+					            rd_cache_line_0[0] <= pb_line[0]; rd_cache_line_0[1] <= pb_line[1];
+					            rd_cache_line_0[2] <= pb_line[2]; rd_cache_line_0[3] <= pb_line[3]; end
+					2'd1: begin rd_cache_tag_1 <= pb_tag; rd_cache_val_1 <= pb_val;
+					            rd_cache_line_1[0] <= pb_line[0]; rd_cache_line_1[1] <= pb_line[1];
+					            rd_cache_line_1[2] <= pb_line[2]; rd_cache_line_1[3] <= pb_line[3]; end
+					2'd2: begin rd_cache_tag_2 <= pb_tag; rd_cache_val_2 <= pb_val;
+					            rd_cache_line_2[0] <= pb_line[0]; rd_cache_line_2[1] <= pb_line[1];
+					            rd_cache_line_2[2] <= pb_line[2]; rd_cache_line_2[3] <= pb_line[3]; end
+					2'd3: begin rd_cache_tag_3 <= pb_tag; rd_cache_val_3 <= pb_val;
+					            rd_cache_line_3[0] <= pb_line[0]; rd_cache_line_3[1] <= pb_line[1];
+					            rd_cache_line_3[2] <= pb_line[2]; rd_cache_line_3[3] <= pb_line[3]; end
+					endcase
+					rd_victim     <= rd_victim + 1'b1;
+				end
+				pb_tag            <= pf_tag;
+				pb_val            <= 32'd0;
+				pb_used           <= 1'b0;
+				pb_fresh          <= 1'b1;
 				fill_tag          <= pf_tag;
-				pf_mark[rd_victim] <= 1'b1;
+				fill_pb           <= 1'b1;
 				fill_wr_mask      <= 32'd0;
 				rd_burst_beat     <= 2'd0;
 				pf_want           <= 1'b0;
@@ -760,7 +820,10 @@ always @(posedge clk_sys) begin
 			if (vram_ddr_ack) begin
 				vram_ddr_req <= 1'b0;
 				if (vram_ddr_rvalid) begin
-					case (rd_victim)
+					if (fill_pb) begin
+						pb_line[2'd0] <= vram_ddr_dout; pb_val[7:0] <= fill_val_0;
+					end
+					else case (rd_victim)
 					2'd0: begin rd_cache_line_0[2'd0] <= vram_ddr_dout; rd_cache_val_0[7:0] <= fill_val_0; end
 					2'd1: begin rd_cache_line_1[2'd0] <= vram_ddr_dout; rd_cache_val_1[7:0] <= fill_val_0; end
 					2'd2: begin rd_cache_line_2[2'd0] <= vram_ddr_dout; rd_cache_val_2[7:0] <= fill_val_0; end
@@ -782,7 +845,10 @@ always @(posedge clk_sys) begin
 
 		S_CPU_DATA: begin
 			if (vram_ddr_rvalid) begin
-				case (rd_victim)
+				if (fill_pb) begin
+					pb_line[rd_burst_beat] <= vram_ddr_dout; pb_val[{rd_burst_beat, 3'b000} +: 8] <= fill_val_b;
+				end
+				else case (rd_victim)
 				2'd0: begin rd_cache_line_0[rd_burst_beat] <= vram_ddr_dout; rd_cache_val_0[{rd_burst_beat, 3'b000} +: 8] <= fill_val_b; end
 				2'd1: begin rd_cache_line_1[rd_burst_beat] <= vram_ddr_dout; rd_cache_val_1[{rd_burst_beat, 3'b000} +: 8] <= fill_val_b; end
 				2'd2: begin rd_cache_line_2[rd_burst_beat] <= vram_ddr_dout; rd_cache_val_2[{rd_burst_beat, 3'b000} +: 8] <= fill_val_b; end
@@ -795,7 +861,7 @@ always @(posedge clk_sys) begin
 					cpu_rd_pend <= 1'b0;
 				end
 				if (rd_burst_beat == 2'd3) begin
-					rd_victim <= rd_victim + 1'b1;
+					if (!fill_pb) rd_victim <= rd_victim + 1'b1;
 					state     <= S_IDLE;
 				end
 			end
@@ -854,12 +920,10 @@ wire pe_hit  = (mem_req && mem_is_vram && !mem_write && !vram_ack &&
 wire pe_fill = !reset && (state == S_IDLE) &&
                !(dma_late && (dma_state == DMA_BURST_REQ) && !dma_take) &&
                cpu_rd_pend && !fifo_conflict && !cpu_vram_write;
-// a next-line prefetch issued (S_IDLE branch 2b; pe_fill_ack and
-// pe_pf_ways are declared above the FSM, which uses them)
-wire pe_pf_issue = !reset && (state == S_IDLE) && PREFETCH &&
+// a next-line prefetch issued (S_IDLE branch 2b, pf_go)
+wire pe_pf_issue = !reset && (state == S_IDLE) &&
                    !(dma_late && (dma_state == DMA_BURST_REQ) && !dma_take) &&
-                   !cpu_rd_pend && !(fifo_count >= 5'd8) && !cpu_vram_write &&
-                   pf_want && !pf_held && !pf_conflict;
+                   !(fifo_count >= 5'd8) && pf_go;
 reg [14:0] pe_last_tag = 15'd0;
 always @(posedge clk_sys) if (pe_fill) pe_last_tag <= cur_rd_tag;
 
@@ -868,7 +932,7 @@ assign perf_ev = {
 	// 11: waits under another line's fill tail
 	cpu_rd_pend && (state == S_CPU_DATA) && (cur_rd_tag != fill_tag),
 	// 10: prefetched lines used (first read answered from one)
-	|pe_pf_ways,
+	pb_use && pb_fresh,
 	// 9: next-line prefetches issued
 	pe_pf_issue,
 	// 8: fill of the line after the last one filled
