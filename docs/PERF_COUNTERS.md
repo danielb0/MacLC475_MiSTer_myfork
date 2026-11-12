@@ -6,9 +6,9 @@
 
 Every 2^18 clocks the core writes a snapshot of all counters to DDR3 at ARM physical `0x27F00000` (layout in `MacLC475.sv`, `DDR_PERF_BASE`). Nothing has to be cleared, frozen or paged.
 
-1. Start the logger from the PC; it samples once a second and the CSV lands on the PC: `ssh mister-bedroom python3 -u - < scripts/perflog.py > capture.csv`
+1. Start the logger from a Windows PowerShell terminal: `.\scripts\perflog.ps1` (`-Seconds N` for a timed run, `-Name label`, `-MiSTer mister-living`). It samples once a second into `local/shots/perf/capture_*.csv`; Ctrl-C stops it and it prints and saves the report. From a POSIX shell with the Windows ssh config: `ssh mister-bedroom python3 -u - < scripts/perflog.py > capture.csv` (in WSL, use `ssh.exe`, since the `mister-*` aliases live in the Windows ssh config).
 2. Let it record a few seconds of idle, run the test normally, let it record a few seconds of idle again, then stop the ssh.
-3. `python scripts/perf_report.py capture.csv` prints a per-second timeline, finds the busy stretch (VRAM traffic over 4x the median; `--metric NAME` picks another counter, `--from S --to S` sets it by hand) and prints every counter's total and rate in that window, the idle rate outside it, and the derived figures below.
+3. The report (`python scripts/perf_report.py capture.csv`, run for you by `perflog.ps1`) prints a per-second timeline, finds the busy stretch (VRAM traffic over 4x the median; `--metric NAME` picks another counter, `--from S --to S` sets it by hand) and prints every counter's total and rate in that window, the idle rate outside it, and the derived figures below.
 
 The perf counters in the OSD (Clear, Freeze) still act on the same counters: don't use them during a capture, the report will flag the jump.
 
@@ -31,7 +31,7 @@ Four rows of hex. Rows 1, 3 and 4 hold two counters each (left, right); row 2 is
 | 3 (request cycles) | ROM ifetch, RAM ifetch | ROM data read, RAM data read | RAM data write, I/O |
 | 4 | VRAM read beats, VRAM read cycles | VRAM write beats, VRAM write cycles | machine-side request cycles, machine-side cycles without ack |
 | 5 (VRAM controller) | read hits in the line cache, line fills issued | read-wait clocks in idle, read-wait clocks behind the write FIFO drain | read-wait clocks behind a scanline DMA burst, read-wait clocks while DDR3 accepts the fill |
-| 6 (VRAM controller) | read-wait clocks on fill data beats, read-wait clocks in idle with a FIFO conflict | fills of the line after the last one filled, refills of a line whose tag is already held | reads acked from another line's beat (must be 0), read-wait clocks under another line's fill tail |
+| 6 (VRAM controller) | read-wait clocks on fill data beats, read-wait clocks in idle with a FIFO conflict | fills of the line after the last one filled, next-line prefetches issued | prefetched lines used (first read answered from one), read-wait clocks under another line's fill tail (a prefetch included) |
 
 - Pages 2-4 (except the machine-side pair) watch the CPU's own bus, before the store buffer: a request cycle there is a cycle the bus unit waits on that kind of access. A beat is one acked longword; a line fill is four beats, so ifetch beats / 4 = I-cache misses.
 - Engine idle cycles = cycles minus page 1 and page 0's last counter.

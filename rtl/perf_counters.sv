@@ -25,9 +25,9 @@
 //         at: idle, write drain, DMA burst, DDR3 accepting the fill
 // Page 6: VRAM controller, more read-wait cycles and fill events: read-wait
 //         cycles on fill data beats, read-wait cycles in idle with a FIFO
-//         conflict, fills of the next sequential line, refills of a held
-//         tag, reads acked from another line's beat (must be 0), read-wait
-//         cycles under another line's fill tail
+//         conflict, fills of the next sequential line, next-line
+//         prefetches issued, prefetched lines used, read-wait cycles under
+//         another line's fill (a prefetch included)
 //
 // rd_idx/rd_data read any one counter by number (0-41, page * 6 + slot) for
 // the DDR3 snapshot (MacLC475.sv perf_ddr_*): no clear or freeze needed,

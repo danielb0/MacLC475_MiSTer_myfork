@@ -53,16 +53,20 @@ task automatic perf_check;
                dut.cpu.perf.cnt[26], profile_beats[4]);
     $display("PASS: perf counters agree with the profile's bus counts");
 `ifdef VRAM_DDR3
-    // every VRAM read beat is a hit or a fill beat (pages 5 and 6)
+    // every VRAM read beat is a hit, a fill, or acked by a prefetch's fill
+    // beat (counted only among the used prefetches, cnt[40]); a prefetch is
+    // used at most once (pages 5 and 6)
     if (dut.cpu.perf.cnt[30] + dut.cpu.perf.cnt[31] >
             dut.cpu.perf.cnt[24] + dut.cpu.perf.cnt[24] / 50 ||
-        dut.cpu.perf.cnt[30] + dut.cpu.perf.cnt[31] + dut.cpu.perf.cnt[24] / 50 <
-            dut.cpu.perf.cnt[24] || dut.cpu.perf.cnt[40] != 0)
-        $fatal(1, "VRAM perf events disagree: hits %0d + fills %0d vs read beats %0d, wrong-line acks %0d",
+        dut.cpu.perf.cnt[30] + dut.cpu.perf.cnt[31] + dut.cpu.perf.cnt[40] +
+            dut.cpu.perf.cnt[24] / 50 < dut.cpu.perf.cnt[24] ||
+        dut.cpu.perf.cnt[40] > dut.cpu.perf.cnt[39])
+        $fatal(1, "VRAM perf events disagree: hits %0d + fills %0d vs read beats %0d, prefetches used/issued %0d/%0d",
                dut.cpu.perf.cnt[30], dut.cpu.perf.cnt[31], dut.cpu.perf.cnt[24],
-               dut.cpu.perf.cnt[40]);
-    $display("PASS: VRAM hits %0d + fills %0d vs read beats %0d", dut.cpu.perf.cnt[30],
-             dut.cpu.perf.cnt[31], dut.cpu.perf.cnt[24]);
+               dut.cpu.perf.cnt[40], dut.cpu.perf.cnt[39]);
+    $display("PASS: VRAM hits %0d + fills %0d vs read beats %0d, prefetches used/issued %0d/%0d",
+             dut.cpu.perf.cnt[30], dut.cpu.perf.cnt[31], dut.cpu.perf.cnt[24],
+             dut.cpu.perf.cnt[40], dut.cpu.perf.cnt[39]);
 `endif
 endtask
 

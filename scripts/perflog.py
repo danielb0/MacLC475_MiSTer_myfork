@@ -12,9 +12,11 @@
 #
 #   ssh mister-bedroom python3 -u - < scripts/perflog.py > capture.csv
 #
-# Optional argument: the sample interval in seconds (default 1.0).
-# Stop with Ctrl-C or by killing the ssh.  scripts/perf_report.py reads the
-# CSV.
+# Optional arguments: the sample interval in seconds (default 1.0), then a
+# run time in seconds (default: until stopped).  Stop with Ctrl-C or by
+# killing the ssh; it also exits when its ssh session goes away.  From
+# PowerShell, scripts/perflog.ps1 does all of this.  scripts/perf_report.py
+# reads the CSV.
 
 import mmap
 import os
@@ -28,6 +30,7 @@ WORDS = 23                    # 64-bit words: header, 21 counter pairs, trailer
 N = 42
 
 interval = float(sys.argv[1]) if len(sys.argv) > 1 else 1.0
+duration = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0
 
 fd = os.open("/dev/mem", os.O_RDONLY | os.O_SYNC)
 mem = mmap.mmap(fd, 4096, mmap.MAP_SHARED, mmap.PROT_READ, offset=PHYS)
@@ -51,8 +54,11 @@ print("t,seq," + ",".join("c%d" % i for i in range(N)), flush=True)
 last_seq = None
 stale = 0
 next_t = time.time()
+end_t = next_t + duration if duration > 0 else None
 try:
-    while True:
+    while end_t is None or time.time() <= end_t:
+        if os.getppid() == 1:     # the ssh session is gone
+            break
         s = snapshot()
         now = time.time()
         if s is None:
@@ -71,5 +77,5 @@ try:
             print("%.3f,%d," % (now, seq) + ",".join(map(str, c)), flush=True)
         next_t += interval
         time.sleep(max(0.0, next_t - time.time()))
-except (KeyboardInterrupt, BrokenPipeError):
+except (KeyboardInterrupt, BrokenPipeError, OSError):
     pass

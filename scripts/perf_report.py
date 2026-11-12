@@ -38,8 +38,8 @@ NAMES = [
     "v_hit", "v_fill", "v_wait_idle", "v_wait_drain", "v_wait_dma",
     "v_wait_accept",
     # page 6
-    "v_wait_beats", "v_wait_conflict", "v_fill_next", "v_refill",
-    "v_xline_ack", "v_wait_tail",
+    "v_wait_beats", "v_wait_conflict", "v_fill_next", "v_pf_issue",
+    "v_pf_used", "v_wait_tail",
 ]
 IDX = {n: i for i, n in enumerate(NAMES)}
 
@@ -100,14 +100,19 @@ def find_window(ds, name):
     rates = [rate(d, name) for _, d in ds]
     med = statistics.median(rates)
     thresh = max(4 * med, 1.0)
-    best, cur = (0, 0), None
+    # a benchmark has quiet phases: bridge gaps of up to GAP low samples
+    GAP = 3
+    best, cur, low = (0, 0), None, 0
     for i, r in enumerate(rates):
         if r > thresh:
             cur = (cur[0], i + 1) if cur else (i, i + 1)
+            low = 0
             if cur[1] - cur[0] > best[1] - best[0]:
                 best = cur
-        else:
-            cur = None
+        elif cur:
+            low += 1
+            if low > GAP:
+                cur, low = None, 0
     return best
 
 
@@ -146,8 +151,12 @@ def report(ds, lo, hi):
     vw = g("vram_wr_beats")
     if vw:
         print("  VRAM write cycles / beat %.2f" % (g("vram_wr_cyc") / vw))
-    if g("v_xline_ack"):
-        print("  WARNING: v_xline_ack = %d (must be 0)" % g("v_xline_ack"))
+    # (since the next-line prefetch, a read acked by a prefetch's fill
+    # beat counts as neither a hit nor a fill, so hits+fills can fall short)
+    if g("v_pf_issue"):
+        print("  prefetches used / issued %d / %d (%.1f%%)" % (
+            g("v_pf_used"), g("v_pf_issue"),
+            100 * g("v_pf_used") / g("v_pf_issue")))
 
 
 def main():
@@ -176,7 +185,8 @@ def main():
     else:
         lo, hi = find_window(ds, a.metric)
         if hi == lo:
-            sys.exit("no busy stretch found; give --from/--to")
+            print("\nno busy stretch found (all idle?); give --from/--to")
+            return
     report(ds, lo, hi)
 
 
