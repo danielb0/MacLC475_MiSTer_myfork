@@ -20,14 +20,18 @@
 // Page 4: VRAM read beats, VRAM read cycles, VRAM write beats, VRAM write
 //         cycles, machine-side (after the store buffer) request cycles,
 //         machine-side request cycles without an ack
-// Page 5: VRAM controller (vram_ddr3), reads: hits in the line cache, line
-//         fills issued, then read-wait cycles with the DDR3 state machine
-//         at: idle, write drain, DMA burst, DDR3 accepting the fill
-// Page 6: VRAM controller, more read-wait cycles and fill events: read-wait
-//         cycles on fill data beats, read-wait cycles in idle with a FIFO
-//         conflict, fills of the next sequential line, next-line
-//         prefetches issued, prefetched lines used, read-wait cycles under
-//         another line's fill (a prefetch included)
+// Page 5: VRAM controller (vram_ddr3) hits in the line cache and line
+//         fills issued; CPU frame buffer reads sent straight to the bus
+//         and reads through the engine's general path; VRAM read-wait
+//         cycles under a DMA burst; general-path reads that are split
+// Page 6: VRAM read-wait cycles on fill data beats; CPU frame buffer
+//         stores posted and stores through the general path; next-line
+//         prefetches issued, prefetched lines used; general-path stores
+//         that are split
+// The CPU-side counts on pages 5 and 6 are accesses as the data engine
+// takes them (ap68040_dmu dbg_perf), one each however many bus beats; they
+// replaced VRAM wait counters, so captures before 2026-11-13 read
+// differently in slots 32, 33, 35, 37, 38 and 41.
 //
 // rd_idx/rd_data read any one counter by number (0-41, page * 6 + slot) for
 // the DDR3 snapshot (MacLC475.sv perf_ddr_*): no clear or freeze needed,
@@ -44,7 +48,7 @@ module perf_counters (
 	input       [2:0] page,
 
 	input             retire, retire2,
-	input       [5:0] core,        // ap68040 dbg_perf
+	input      [11:0] core,        // ap68040 dbg_perf
 
 	input             c_req, c_ack, c_write, c_instr,
 	input      [31:0] c_addr,
@@ -80,8 +84,9 @@ wire [5:0] cat = {
 };
 
 wire [N-1:0] ev = {
-	// pages 5 and 6
-	vram_ev,
+	// pages 5 and 6: vram_ddr3's events, six replaced by the core's
+	core[11], vram_ev[10:9], core[10:9], vram_ev[6],
+	core[8], vram_ev[4], core[7:6], vram_ev[1:0],
 	// page 4
 	m_req && !m_ack, m_req,
 	c_req && vram && c_write, beat && vram && c_write,

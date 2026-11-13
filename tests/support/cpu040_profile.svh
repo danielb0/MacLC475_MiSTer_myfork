@@ -52,6 +52,19 @@ task automatic perf_check;
                dut.cpu.perf.cnt[29], m_wait, dut.cpu.perf.cnt[24], profile_beats[3],
                dut.cpu.perf.cnt[26], profile_beats[4]);
     $display("PASS: perf counters agree with the profile's bus counts");
+    // the engine's own counts of frame buffer accesses: no workload here is
+    // split, so a store is one beat; a read can be discarded after dispatch
+    if (dut.cpu.perf.cnt[37] + dut.cpu.perf.cnt[38] != dut.cpu.perf.cnt[26] ||
+        dut.cpu.perf.cnt[35] != 0 || dut.cpu.perf.cnt[41] != 0 ||
+        dut.cpu.perf.cnt[32] + dut.cpu.perf.cnt[33] < dut.cpu.perf.cnt[24] ||
+        dut.cpu.perf.cnt[32] + dut.cpu.perf.cnt[33] >
+            dut.cpu.perf.cnt[24] + dut.cpu.perf.cnt[24] / 50)
+        $fatal(1, "VRAM path counters disagree: reads fast %0d + general %0d vs beats %0d, stores posted %0d + slow %0d vs beats %0d",
+               dut.cpu.perf.cnt[32], dut.cpu.perf.cnt[33], dut.cpu.perf.cnt[24],
+               dut.cpu.perf.cnt[37], dut.cpu.perf.cnt[38], dut.cpu.perf.cnt[26]);
+    $display("PASS: VRAM reads fast %0d + general %0d vs beats %0d, stores posted %0d + slow %0d vs beats %0d",
+             dut.cpu.perf.cnt[32], dut.cpu.perf.cnt[33], dut.cpu.perf.cnt[24],
+             dut.cpu.perf.cnt[37], dut.cpu.perf.cnt[38], dut.cpu.perf.cnt[26]);
 `ifdef VRAM_DDR3
     // every VRAM read beat is a hit, a fill, or acked by a prefetch's fill
     // beat (counted only among the used prefetches, cnt[40]); a prefetch is

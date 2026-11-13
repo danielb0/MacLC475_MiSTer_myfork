@@ -186,8 +186,12 @@ module ap68040_dmu
 	input  logic [31:0] sn_wword,       // ...this long word on every long word
 
 	// observation only, for perf counters: [2:0] engine state class (see the
-	// end), [3] DC2 holds a valid uop, [4] WB holds a valid uop
-	output logic  [4:0] dbg_perf
+	// end), [3] DC2 holds a valid uop, [4] WB holds a valid uop; one-clock
+	// strobes for frame buffer accesses as the engine takes them: [5] read
+	// sent straight to the bus, [6] read through the general path, [7] such
+	// a read that is split, [8] store posted, [9] store through the general
+	// path, [10] such a store that is split
+	output logic [10:0] dbg_perf
 );
 
 localparam logic [2:0] MT_CINV = 3'd1, MT_CPUSH = 3'd2, MT_PFLUSH = 3'd3, MT_PTEST = 3'd4;
@@ -1033,6 +1037,7 @@ wire        fill_late_ok = (m2.r.mem == M_ST) ? (bo_got != 4'd0)
 // BIU request from the engine's bus step
 //--------------------------------------------------------------------------
 logic e_breq;
+logic [5:0] pe_vram;                // perf strobes, dbg_perf[10:5]
 always_comb begin
 	// Scalar request fields are registered before E_BUS; hold until grant.
 	b_req  = e_breq || ((e_st == E_BUS) && !sn_frz && !bo_cancel &&
@@ -1112,6 +1117,7 @@ always_ff @(posedge clk) begin
 	iatc_wr   <= 1'b0;
 	tw_b      <= 1'b0;
 	dw        <= 1'b0;
+	pe_vram   <= '0;
 	steal_q   <= steal;
 	atc_la_q  <= steal  ? st_la[31:12] : adv_ag ? dm_va[31:12] : m1.a[31:12];
 	atc_fc2_q <= steal  ? st_fc2 : adv_ag ? dm_super : m1.smode;
@@ -1330,12 +1336,16 @@ always_ff @(posedge clk) begin
 				bo_wd <= lalign(st_data, m4.r.msz);
 				e_ret <= E_VRAM_DONE;
 				e_st <= E_BUS;
+				pe_vram[3] <= 1'b1;
 				st_rdy_r <= !adv_wb;
 				st_fault_r <= 1'b0;
 				e_wst_done <= !adv_wb;
 			end
-			else if (wb_slow)
+			else if (wb_slow) begin
 				e_st <= E_W_START;
+				if (m4.x.ok && !m4.x.flt && m4.x.pa[31:21] == 11'b1111_1001_000)
+					pe_vram[5:4] <= {m4.split, 1'b1};
+			end
 			else if (((dc2_slow && !dm_s1) || (e_job && m2.r.v && !e_dc2_done)) && !kill_now) begin
 				// Clear at scheduling; a snoop may freeze E_S_START through a kill.
 				e_kill <= 1'b0;
@@ -1366,10 +1376,14 @@ always_ff @(posedge clk) begin
 					e_ret      <= E_S_BUSD;
 					e_st       <= E_BUS;
 					e_vrd      <= 1'b1;
+					pe_vram[0] <= 1'b1;
 				end
 				else begin
 					e_vrd <= 1'b0;
 					e_st  <= E_S_START;
+					if ((m2.r.mem == M_LD || m2.r.mem == M_RMW) && m2.x.ok && !m2.x.flt &&
+					    m2.x.pa[31:21] == 11'b1111_1001_000)
+						pe_vram[2:1] <= {m2.split, 1'b1};
 				end
 			end
 			else if (iw_req && !iw_done) begin
@@ -2174,6 +2188,7 @@ always_ff @(posedge clk) begin
 						e_breq     <= 1'b1;
 						e_st       <= E_BUS_W;
 						e_vrd      <= 1'b1;
+						pe_vram[0] <= 1'b1;
 					end
 				end
 				else
@@ -2765,6 +2780,6 @@ always_comb begin
 	default:                                        dbg_ecls = 3'd7;
 	endcase
 end
-assign dbg_perf = {m4.r.v && !adv_wb, m2.r.v && !adv_dc2, dbg_ecls};
+assign dbg_perf = {pe_vram, m4.r.v && !adv_wb, m2.r.v && !adv_dc2, dbg_ecls};
 
 endmodule

@@ -35,11 +35,11 @@ NAMES = [
     "vram_rd_beats", "vram_rd_cyc", "vram_wr_beats", "vram_wr_cyc",
     "m_req_cyc", "m_noack_cyc",
     # page 5: vram_ddr3
-    "v_hit", "v_fill", "v_wait_idle", "v_wait_drain", "v_wait_dma",
-    "v_wait_accept",
+    "v_hit", "v_fill", "vrd_fast", "vrd_gen", "v_wait_dma",
+    "vrd_gen_split",
     # page 6
-    "v_wait_beats", "v_wait_conflict", "v_fill_next", "v_pf_issue",
-    "v_pf_used", "v_wait_tail",
+    "v_wait_beats", "vst_post", "vst_slow", "v_pf_issue",
+    "v_pf_used", "vst_slow_split",
 ]
 IDX = {n: i for i, n in enumerate(NAMES)}
 
@@ -146,6 +146,10 @@ def report(ds, lo, hi):
     vr = g("vram_rd_beats")
     print("  VRAM hits+fills vs reads %d vs %d" % (g("v_hit") + g("v_fill"),
                                                    vr))
+    print("  VRAM reads fast / general (split)  %d / %d (%d)" % (
+        g("vrd_fast"), g("vrd_gen"), g("vrd_gen_split")))
+    print("  VRAM stores posted / slow (split)  %d / %d (%d)" % (
+        g("vst_post"), g("vst_slow"), g("vst_slow_split")))
     if vr:
         print("  VRAM read cycles / beat  %.2f" % (g("vram_rd_cyc") / vr))
     vw = g("vram_wr_beats")
