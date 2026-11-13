@@ -419,7 +419,7 @@ wire        fill_mine    = (cur_rd_tag == fill_tag);
 // PF_SEQ: prefetch N+1 only while N-1 is still held, i.e. once a walk is
 // under way, so lone reads do not spend DDR3 time on lines never read.
 localparam PREFETCH = 1'b1;
-localparam PF_SEQ   = 1'b1;
+localparam PF_SEQ   = 1'b0;
 reg         pf_want = 1'b0;
 reg  [14:0] pf_tag  = 15'd0;
 function tag_held(input [14:0] t);
