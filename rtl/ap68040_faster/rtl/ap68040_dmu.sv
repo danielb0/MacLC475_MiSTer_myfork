@@ -959,7 +959,7 @@ wire wb_fs = wb_st && m4.split && m4.x.ok && !m4.x.flt && m4.x.hit && m4.x.cm ==
 // add no write FIFO. The engine stays busy until completion, so a later
 // device access or maintenance operation cannot pass it. A cache hit, fault,
 // locked RMW, split word, or MOVE16 keeps the normal precise path.
-wire wb_vram_post = PA_VRAM_POST && PA_IO_SERIAL && wb_st && (m4.r.mem == M_ST) &&
+wire wb_vram_post = PA_VRAM_POST && PA_IO_SERIAL && wb_st &&
                     !m4.split && m4.x.ok && !m4.x.flt && (!dc_en || !m4.x.hit) &&
                     m4.x.cm[1] && !m4.r.lock && (m4.r.ack == 2'd0) &&
                     (m4.r.msz != SZ_Q) &&
