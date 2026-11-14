@@ -67,6 +67,7 @@ module ap68040_dmu
 	parameter bit          PA_VRAM_POST = 0,
 	parameter bit          VRD_CHAIN = 1,    // a VRAM read follows a posted store at its grant
 	parameter bit          VRD_NOW = 1,      // ... and answers DC2 in the clock of its done
+	parameter bit          MV16_FAST = 1,    // MOVE16 on VRAM: direct line read, posted line store
 	parameter logic [31:0] PA_C0_MASK = 32'h0, PA_C0_MATCH = 32'h0,
 	parameter logic [31:0] PA_C1_MASK = 32'h0, PA_C1_MATCH = 32'h0
 )
@@ -190,8 +191,10 @@ module ap68040_dmu
 	// strobes for frame buffer accesses as the engine takes them: [5] read
 	// sent straight to the bus, [6] read through the general path, [7] such
 	// a read that is split, [8] store posted, [9] store through the general
-	// path, [10] such a store that is split
-	output logic [10:0] dbg_perf
+	// path, [10] such a store that is split; and for the MMU and caches:
+	// [11] a table walk started, [12] a PFLUSH (any scope), [13] a
+	// CINV/CPUSH reaching the instruction cache, [14] a line pushed by CPUSH
+	output logic [14:0] dbg_perf
 );
 
 localparam logic [2:0] MT_CINV = 3'd1, MT_CPUSH = 3'd2, MT_PFLUSH = 3'd3, MT_PTEST = 3'd4;
@@ -374,6 +377,9 @@ logic  [1:0] sn_way;
 logic        bo_cancel;            // the queued push was invalidated by a snoop
 logic        bo_ingnt;             // the engine's transfer is the BIU's (granted)
 logic        post_pend;            // a posted VRAM store released at grant is still on the bus
+logic        pl_act;               // a posted MOVE16 line store: from its dispatch to its done
+logic        pl_bus;               // ... granted: the next done or error is its own
+logic [127:0] pl_line;             // ... its data (the BIU drives a line from it until done)
 logic  [3:0] bo_got;               // a line read: the long words that arrived
 
 // The lookup set: AG's address (late: register read, address adders)
@@ -763,8 +769,13 @@ wire [31:0] fast_data = take({dq2, 64'd0}, {2'd0, m2.r.a[1:0]}, nbytes(m2.r.msz)
 
 // a store with its translation known needs nothing from DC2 unless it must
 // allocate (copyback miss), is split, or is a MOVE16 destination
+// (a MOVE16 line store to the frame buffer too: never cached, so there is no
+// line to invalidate, and WB posts it -- wb_vram_post)
+wire m2_qvst   = (MV16_FAST != 0) && PA_VRAM_POST && PA_IO_SERIAL && m2.x.cm[1] &&
+                 !(m2.x.hit && dc_en) && !m2.r.lock && (m2.r.ack == 2'd0) &&
+                 (m2.x.pa[31:21] == 11'b1111_1001_000);
 wire st_simple = m2.r.v && (m2.r.mem == M_ST) && m2.x.ok && !m2.x.flt && !m2.split &&
-                 (m2.r.msz != SZ_Q) &&
+                 ((m2.r.msz != SZ_Q) || m2_qvst) &&
                  !(dc_en && m2.x.cm == 2'b01 && !m2.x.hit && !m2.r.noalloc && !m2.r.lock);
 
 //--------------------------------------------------------------------------
@@ -962,12 +973,14 @@ wire wb_fs = wb_st && m4.split && m4.x.ok && !m4.x.flt && m4.x.hit && m4.x.cm ==
 // the existing bus engine drains it. Reuse bo's address/data registers;
 // add no write FIFO. The engine stays busy until completion, so a later
 // device access or maintenance operation cannot pass it. A cache hit, fault,
-// locked RMW, split word, or MOVE16 keeps the normal precise path.
+// locked RMW or split word keeps the normal precise path.  A MOVE16 line
+// store is posted the same way, its data copied to pl_line (the BIU drives a
+// line from the requester's data until done; one such store at a time).
 wire wb_vram_post = PA_VRAM_POST && PA_IO_SERIAL && wb_st &&
                     !m4.split && m4.x.ok && !m4.x.flt && (!dc_en || !m4.x.hit) &&
                     m4.x.cm[1] && !m4.r.lock && (m4.r.ack == 2'd0) &&
-                    (m4.r.msz != SZ_Q) &&
-                    ({1'b0,m4.r.a[1:0]} + nbytes(m4.r.msz) <= 3'd4) &&
+                    ((m4.r.msz == SZ_Q) ? ((MV16_FAST != 0) && !pl_act) :
+                     ({1'b0,m4.r.a[1:0]} + nbytes(m4.r.msz) <= 3'd4)) &&
                     (m4.x.pa[31:21] == 11'b1111_1001_000) &&
                     (e_st == E_IDLE) && !e_wst_done && !wfs_p1 && !mt_v;
 wire   [2:0] wfs_n0  = 3'(5'd16 - {1'b0, m4.r.a[3:0]});
@@ -986,11 +999,14 @@ wire wb_slow  = wb_st && !wb_fast && !wb_fs && !wfs_p1 && !e_wst_done;
 // A plain frame buffer read goes from E_IDLE to the bus: what E_S_START and
 // E_S_ACT would decide is known from DC2's own lookup.  A VRAM read has no
 // side effect, so it does not wait for older instructions (dm_older); older
-// stores still go first.  Anything else takes the general path.
+// stores still go first.  A MOVE16 source line is read the same way (a line
+// transfer; the general path's bus step, without its lookup clocks).
+// Anything else takes the general path.
 wire dc2_vrd  = PA_VRAM_POST && PA_IO_SERIAL &&
                 (m2.r.mem == M_LD || m2.r.mem == M_RMW) && !m2.sfast && !m2.split &&
                 m2.x.ok && !m2.x.flt && m2.x.cm[1] && !(m2.x.hit && dc_en) &&
-                !m2.r.lock && !m2.r.pastc && (m2.r.ack == 2'd0) && (m2.r.msz != SZ_Q) &&
+                !m2.r.lock && !m2.r.pastc && (m2.r.ack == 2'd0) &&
+                ((m2.r.msz != SZ_Q) || ((MV16_FAST != 0) && m2.r.mem == M_LD)) &&
                 (m2.x.pa[31:21] == 11'b1111_1001_000) &&
                 !(m3.r.v && m3.r.mem != M_LD) && !(m4.r.v && m4.r.mem != M_LD);
 // The same read, taken straight from a posted store's grant (E_BUS_W): the
@@ -1037,10 +1053,16 @@ wire        fill_late_ok = (m2.r.mem == M_ST) ? (bo_got != 4'd0)
 // BIU request from the engine's bus step
 //--------------------------------------------------------------------------
 logic e_breq;
+// While a posted line store is out, every other write waits in E_BUS: the
+// BIU takes write data at the grant (a line's: from the request on), which
+// can come in the clock of the line store's last beat, with b_wdata still
+// its data.  Reads go ahead.
+wire  bus_hold = pl_act && !bo.rd && !(bo.line && e_ret == E_VRAM_DONE);
 logic [5:0] pe_vram;                // perf strobes, dbg_perf[10:5]
+logic [3:0] pe_mmu;                 // perf strobes, dbg_perf[14:11]
 always_comb begin
 	// Scalar request fields are registered before E_BUS; hold until grant.
-	b_req  = e_breq || ((e_st == E_BUS) && !sn_frz && !bo_cancel &&
+	b_req  = e_breq || ((e_st == E_BUS) && !sn_frz && !bo_cancel && !bus_hold &&
 	                    !bo.line && !bo.lock && bo.ack == 2'd0 && bo.tt == TT_NORMAL);
 	b_breq = '0;
 	// acknowledge cycles (TT=3): IACK at $FFFFFFFF, a byte, TM = the level
@@ -1055,7 +1077,7 @@ always_comb begin
 	b_breq.ci    = bo.ci;
 	b_breq.lock  = bo.lock;
 	b_breq.locke = bo.locke && !bo.rd && (bo.line || bo_left == bo_np);
-	b_wdata      = bo.line ? bo_line :
+	b_wdata      = pl_act ? pl_line : bo.line ? bo_line :
 	               {96'd0, (bo_np == 3'd1) ? {4{bo_wd[31:24]}} :
 	                       (bo_np == 3'd2) ? {2{bo_wd[31:16]}} : bo_wd};
 end
@@ -1118,6 +1140,7 @@ always_ff @(posedge clk) begin
 	tw_b      <= 1'b0;
 	dw        <= 1'b0;
 	pe_vram   <= '0;
+	pe_mmu    <= '0;
 	steal_q   <= steal;
 	atc_la_q  <= steal  ? st_la[31:12] : adv_ag ? dm_va[31:12] : m1.a[31:12];
 	atc_fc2_q <= steal  ? st_fc2 : adv_ag ? dm_super : m1.smode;
@@ -1166,6 +1189,7 @@ always_ff @(posedge clk) begin
 		m1_stale <= 1'b0;
 		sn_ph <= SN_IDLE; sn_src <= '0; sn_way <= '0; bo_cancel <= 1'b0;
 		bo_ingnt <= 1'b0; sn_pvm <= 1'b0; sn_bom <= 1'b0; post_pend <= 1'b0; e_vrd <= 1'b0;
+		pl_act <= 1'b0; pl_bus <= 1'b0;
 		sn_look <= 1'b0; sn_hit <= 1'b0; sn_dirty <= 1'b0;
 		clr_i   <= '0;
 		clr_rst <= 1'b0;
@@ -1321,9 +1345,9 @@ always_ff @(posedge clk) begin
 			else if (mt_v && !mt_done)
 				e_st <= E_M_START;
 			else if (wb_vram_post) begin
-				bo.line <= 1'b0;
+				bo.line <= (m4.r.msz == SZ_Q);
 				bo.rd <= 1'b0;
-				bo.tt <= fc_tt(m4.r.fc);
+				bo.tt <= (m4.r.msz == SZ_Q) ? TT_MOVE16 : fc_tt(m4.r.fc);
 				bo.tm <= fc_tm(m4.r.fc);
 				bo.upa <= m4.x.upa;
 				bo.ci <= 1'b1;
@@ -1331,9 +1355,13 @@ always_ff @(posedge clk) begin
 				bo.locke <= 1'b0;
 				bo.ack <= 2'd0;
 				bo.tln <= 2'd0;
-				bo_pa <= m4.x.pa;
-				bo_left <= nbytes(m4.r.msz);
+				bo_pa <= (m4.r.msz == SZ_Q) ? {m4.x.pa[31:4], 4'd0} : m4.x.pa;
+				bo_left <= (m4.r.msz == SZ_Q) ? 3'd4 : nbytes(m4.r.msz);
 				bo_wd <= lalign(st_data, m4.r.msz);
+				if (m4.r.msz == SZ_Q) begin
+					pl_line <= mv_line;
+					pl_act  <= 1'b1;
+				end
 				e_ret <= E_VRAM_DONE;
 				e_st <= E_BUS;
 				pe_vram[3] <= 1'b1;
@@ -1361,9 +1389,9 @@ always_ff @(posedge clk) begin
 					e_n        <= nbytes(m2.r.msz);
 					sp_dw      <= 1'b0;
 					sp_job     <= 1'b0;
-					bo.line    <= 1'b0;
+					bo.line    <= (m2.r.msz == SZ_Q);
 					bo.rd      <= 1'b1;
-					bo.tt      <= fc_tt(m2.r.fc);
+					bo.tt      <= (m2.r.msz == SZ_Q) ? TT_MOVE16 : fc_tt(m2.r.fc);
 					bo.tm      <= fc_tm(m2.r.fc);
 					bo.upa     <= m2.x.upa;
 					bo.ci      <= 1'b1;
@@ -1371,11 +1399,11 @@ always_ff @(posedge clk) begin
 					bo.locke   <= 1'b0;
 					bo.ack     <= 2'd0;
 					bo.tln     <= 2'd0;
-					bo_pa      <= m2.x.pa;
-					bo_left    <= nbytes(m2.r.msz);
+					bo_pa      <= (m2.r.msz == SZ_Q) ? {m2.x.pa[31:4], 4'd0} : m2.x.pa;
+					bo_left    <= (m2.r.msz == SZ_Q) ? 3'd4 : nbytes(m2.r.msz);
 					e_ret      <= E_S_BUSD;
 					e_st       <= E_BUS;
-					e_vrd      <= 1'b1;
+					e_vrd      <= (m2.r.msz != SZ_Q);
 					pe_vram[0] <= 1'b1;
 				end
 				else begin
@@ -1829,6 +1857,7 @@ always_ff @(posedge clk) begin
 		//==============================================================
 		E_M_START: begin
 			mt_fault <= 1'b0;
+			pe_mmu[1] <= (mt_op == MT_PFLUSH);
 			case (mt_op)
 				MT_PFLUSH, MT_PTEST: begin
 					// both ATCs; by page, or all (N: spare global entries).
@@ -1926,6 +1955,7 @@ always_ff @(posedge clk) begin
 			                                            : tq_b[w][CTW-1:11-CSH] == mt_addr[31:12])));
 			if (m && mt_op == MT_CPUSH && sc_ld[w]) begin
 				// push (it is invalidated with the push)
+				pe_mmu[3] <= 1'b1;
 				f_set   <= s;
 				f_way   <= w;
 				pv_lock <= 1'b0;
@@ -1953,6 +1983,7 @@ always_ff @(posedge clk) begin
 				ic_inv_scope <= mt_scope;
 				ic_inv_pa    <= mt_addr;
 				if (ic_inv_done) begin
+					pe_mmu[2] <= 1'b1;
 					ic_inv <= 1'b0;
 					e_st   <= E_M_DONE;
 				end
@@ -2121,6 +2152,8 @@ always_ff @(posedge clk) begin
 				bo_cancel <= 1'b0;
 				e_st      <= e_ret;
 			end
+			else if (bus_hold)
+				;                       // a posted line store is still out
 			else begin
 				e_breq <= 1'b1;
 				e_st   <= E_BUS_W;
@@ -2147,6 +2180,7 @@ always_ff @(posedge clk) begin
 					// 6 clocks a store (1 E_BUS, 4 E_BUS_W, 1 E_VRAM_DONE)
 					// with the platform acknowledging the next clock.
 					post_pend <= 1'b1;
+					if (bo.line) pl_bus <= 1'b1;
 					e_st      <= E_IDLE;
 					// The frame buffer read waiting in DC2 behind this
 					// store (QuickDraw's read/modify/write loops) is
@@ -2167,9 +2201,9 @@ always_ff @(posedge clk) begin
 						e_n        <= nbytes(m2.r.msz);
 						sp_dw      <= 1'b0;
 						sp_job     <= 1'b0;
-						bo.line    <= 1'b0;
+						bo.line    <= (m2.r.msz == SZ_Q);
 						bo.rd      <= 1'b1;
-						bo.tt      <= fc_tt(m2.r.fc);
+						bo.tt      <= (m2.r.msz == SZ_Q) ? TT_MOVE16 : fc_tt(m2.r.fc);
 						bo.tm      <= fc_tm(m2.r.fc);
 						bo.upa     <= m2.x.upa;
 						bo.ci      <= 1'b1;
@@ -2177,8 +2211,8 @@ always_ff @(posedge clk) begin
 						bo.locke   <= 1'b0;
 						bo.ack     <= 2'd0;
 						bo.tln     <= 2'd0;
-						bo_pa      <= m2.x.pa;
-						bo_left    <= nbytes(m2.r.msz);
+						bo_pa      <= (m2.r.msz == SZ_Q) ? {m2.x.pa[31:4], 4'd0} : m2.x.pa;
+						bo_left    <= (m2.r.msz == SZ_Q) ? 3'd4 : nbytes(m2.r.msz);
 						bo_err     <= 1'b0;
 						bo_got     <= 4'd0;
 						bo_tci     <= 1'b0;
@@ -2187,7 +2221,7 @@ always_ff @(posedge clk) begin
 						e_ret      <= E_S_BUSD;
 						e_breq     <= 1'b1;
 						e_st       <= E_BUS_W;
-						e_vrd      <= 1'b1;
+						e_vrd      <= (m2.r.msz != SZ_Q);
 						pe_vram[0] <= 1'b1;
 					end
 				end
@@ -2224,7 +2258,23 @@ always_ff @(posedge clk) begin
 				e_st   <= e_ret;
 			end
 			else if (b_done && bo_ingnt) begin
-				if (bo.line || bo.ack != 2'd0) e_st <= e_ret;
+					if ((MV16_FAST != 0) && bo.line && bo.rd && e_ret == E_S_BUSD &&
+				    m2.r.msz == SZ_Q && !(pbe_r && pv_for == 2'd0)) begin
+					// a MOVE16 source line read from the bus answers DC2
+					// at its last beat's TA (that beat comes with done),
+					// like the single read below: what E_S_BUSD, E_S_NEXT
+					// and E_S_DONE would do, 3 clocks sooner
+					logic [127:0] ln;
+					ln = bo_line;
+					if (b_rvalid) ln[127 - 32*b_rbeat -: 32] = b_rdata;
+					mv_line    <= ln;
+					m2.x       <= e_x;
+					e_job      <= 1'b0;
+					e_dc2_done <= !e_kill;
+					steal      <= 1'b0;
+					e_st       <= E_IDLE;
+				end
+				else if (bo.line || bo.ack != 2'd0) e_st <= e_ret;
 				else begin
 					if (!bo.rd) bo_wd <= bo_wd << (8 * bo_pn);
 					bo_pa   <= bo_pa + {29'd0, bo_pn};
@@ -2273,6 +2323,7 @@ always_ff @(posedge clk) begin
 		// tw_i selects; returns to e_ret
 		//==============================================================
 		E_TW_START: begin
+			pe_mmu[0] <= 1'b1;
 			tw_lvl  <= TW_ROOT;
 			tw_wp   <= 1'b0;
 			tw_fail <= 1'b0;
@@ -2520,6 +2571,8 @@ always_ff @(posedge clk) begin
 		E_VRAM_DONE: begin
 			// (only reached if a post was cancelled before grant; the normal
 			// path leaves E_BUS_W for E_IDLE at the grant)
+			pl_act <= 1'b0;
+			pl_bus <= 1'b0;
 			e_st <= E_IDLE;
 		end
 		E_I_DONE: begin
@@ -2530,6 +2583,13 @@ always_ff @(posedge clk) begin
 		default: e_st <= E_IDLE;
 		endcase
 
+		// a posted line store's completion: the first after its grant (the
+		// BIU runs transfers in order; a done in the grant's own clock is
+		// the transfer before it)
+		if (pl_bus && (b_done || b_err)) begin
+			pl_act <= 1'b0;
+			pl_bus <= 1'b0;
+		end
 		// the released posted store's completion: nothing is granted then
 		if ((b_done || b_err) && !bo_ingnt && post_pend) begin
 			post_pend <= 1'b0;
@@ -2780,6 +2840,6 @@ always_comb begin
 	default:                                        dbg_ecls = 3'd7;
 	endcase
 end
-assign dbg_perf = {pe_vram, m4.r.v && !adv_wb, m2.r.v && !adv_dc2, dbg_ecls};
+assign dbg_perf = {pe_mmu, pe_vram, m4.r.v && !adv_wb, m2.r.v && !adv_dc2, dbg_ecls};
 
 endmodule

@@ -38,8 +38,8 @@ NAMES = [
     "v_hit", "v_fill", "vrd_fast", "vrd_gen", "v_wait_dma",
     "vrd_gen_split",
     # page 6
-    "v_wait_beats", "vst_post", "vst_slow", "v_pf_issue",
-    "v_pf_used", "vst_slow_split",
+    "walks", "vst_post", "vst_slow", "pflush",
+    "ic_inv", "cpush_lines",
 ]
 IDX = {n: i for i, n in enumerate(NAMES)}
 
@@ -148,8 +148,8 @@ def report(ds, lo, hi):
                                                    vr))
     print("  VRAM reads fast / general (split)  %d / %d (%d)" % (
         g("vrd_fast"), g("vrd_gen"), g("vrd_gen_split")))
-    print("  VRAM stores posted / slow (split)  %d / %d (%d)" % (
-        g("vst_post"), g("vst_slow"), g("vst_slow_split")))
+    print("  VRAM stores posted / slow          %d / %d" % (
+        g("vst_post"), g("vst_slow")))
     if vr:
         print("  VRAM read cycles / beat  %.2f" % (g("vram_rd_cyc") / vr))
     vw = g("vram_wr_beats")
@@ -157,10 +157,11 @@ def report(ds, lo, hi):
         print("  VRAM write cycles / beat %.2f" % (g("vram_wr_cyc") / vw))
     # (since the next-line prefetch, a read acked by a prefetch's fill
     # beat counts as neither a hit nor a fill, so hits+fills can fall short)
-    if g("v_pf_issue"):
-        print("  prefetches used / issued %d / %d (%.1f%%)" % (
-            g("v_pf_used"), g("v_pf_issue"),
-            100 * g("v_pf_used") / g("v_pf_issue")))
+    w = g("walks")
+    print("  table walks %d, PFLUSH %d, I-cache CINV/CPUSH %d, CPUSH lines %d"
+          % (w, g("pflush"), g("ic_inv"), g("cpush_lines")))
+    if w:
+        print("  cycles / table walk      %.1f" % (g("eng_walk") / w))
 
 
 def main():

@@ -24,10 +24,12 @@
 //         fills issued; CPU frame buffer reads sent straight to the bus
 //         and reads through the engine's general path; VRAM read-wait
 //         cycles under a DMA burst; general-path reads that are split
-// Page 6: VRAM read-wait cycles on fill data beats; CPU frame buffer
-//         stores posted and stores through the general path; next-line
-//         prefetches issued, prefetched lines used; general-path stores
-//         that are split
+// Page 6: table walks started; CPU frame buffer stores posted and
+//         stores through the general path; PFLUSHes (any scope);
+//         CINV/CPUSHes reaching the instruction cache; lines pushed by
+//         CPUSH (the four MMU/cache counts replaced VRAM controller ones
+//         on 2026-11-13: fill-beat waits, prefetches issued and used,
+//         split general-path stores)
 // The CPU-side counts on pages 5 and 6 are accesses as the data engine
 // takes them (ap68040_dmu dbg_perf), one each however many bus beats; they
 // replaced VRAM wait counters, so captures before 2026-11-13 read
@@ -48,7 +50,7 @@ module perf_counters (
 	input       [2:0] page,
 
 	input             retire, retire2,
-	input      [11:0] core,        // ap68040 dbg_perf
+	input      [15:0] core,        // ap68040 dbg_perf
 
 	input             c_req, c_ack, c_write, c_instr,
 	input      [31:0] c_addr,
@@ -85,7 +87,7 @@ wire [5:0] cat = {
 
 wire [N-1:0] ev = {
 	// pages 5 and 6: vram_ddr3's events, six replaced by the core's
-	core[11], vram_ev[10:9], core[10:9], vram_ev[6],
+	core[15:13], core[10:9], core[12],
 	core[8], vram_ev[4], core[7:6], vram_ev[1:0],
 	// page 4
 	m_req && !m_ack, m_req,
