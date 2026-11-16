@@ -110,7 +110,9 @@ module ap68040
 	// decoder's queue is empty; [11:6] the DMU's frame buffer access
 	// strobes (its dbg_perf[10:5]); [15:12] its MMU and cache strobes
 	// (its dbg_perf[14:11])
-	output logic  [15:0] dbg_perf
+	output logic  [15:0] dbg_perf,
+	// observation only: the last F-line / illegal trap (ap68040_backend)
+	output logic [255:0] dbg_trap
 );
 
 // the dual-issue events behind dbg_pev
@@ -315,7 +317,7 @@ ap68040_backend #(.HAS_FPU(HAS_FPU), .FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_
 	.ipl(ipl_v), .dbcc_floor(dbcc_floor), .iack_lvl(iack_lvl), .rsto_req(rsto_req), .rsto_busy(rsto_busy),
 	.kill_now(kill_now), .lk_abandon(lk_abandon), .adv_ag(adv_ag),
 	.dtt0(dtt0), .dtt1(dtt1), .itt0(itt0), .itt1(itt1), .tc(tc),
-	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_retire2(dbg_retire2), .halted(dbg_halted), .fetch_stop(be_fstop)
+	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_retire2(dbg_retire2), .halted(dbg_halted), .dbg_trap(dbg_trap), .fetch_stop(be_fstop)
 );
 
 logic [14:0] dm_perf;

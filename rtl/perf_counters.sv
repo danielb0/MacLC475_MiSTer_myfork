@@ -56,6 +56,7 @@ module perf_counters (
 	input      [31:0] c_addr,
 	input             m_req, m_ack,
 	input      [11:0] vram_ev,         // vram_ddr3 event strobes, pages 5-6
+	input     [255:0] trap,            // ap68040 dbg_trap: read as 42-49
 
 	output     [63:0] row1,
 	output     [31:0] row2,
@@ -131,6 +132,9 @@ assign row2 = {12'hC00, 1'b0, pg, 3'd0, freeze, 3'd0, ovf, 8'h00};
 assign row3 = {cnt[base + 6'd2], cnt[base + 6'd3]};
 assign row4 = {cnt[base + 6'd4], cnt[base + 6'd5]};
 
-assign rd_data = (rd_idx < N) ? cnt[rd_idx] : 32'd0;
+// 42-49 are not counters: the CPU's last F-line / illegal trap capture
+wire [5:0] trap_k = rd_idx - 6'd42;
+assign rd_data = (rd_idx < N)      ? cnt[rd_idx] :
+                 (rd_idx < 6'd50)  ? trap[trap_k[2:0] * 32 +: 32] : 32'd0;
 
 endmodule

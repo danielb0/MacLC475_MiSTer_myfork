@@ -152,6 +152,7 @@ module ap68040_backend
 	output logic        dbg_retire,
 	output logic        dbg_retire2,    // ... and a second instruction (the second slot)
 	output logic        halted,
+	output logic [255:0] dbg_trap,      // last F-line / illegal trap (diag)
 	output logic        fetch_stop      // no new instruction fetches: stopped
                                         // (STOP) or halted
 );
@@ -1721,6 +1722,104 @@ always_comb begin
 		x_nsr[10:8] = irq_lvl;
 	end
 end
+
+// diag: the last F-line (vector 11) or illegal (vector 4) trap taken at WB,
+// for the perf-counter DDR3 snapshot.  The opword and first extension word
+// are those of the last F-line uop to enter EX (the LC040 path); bit 19 of
+// word 2 says they belong to the trapping instruction.
+//   [31:0]   {F-line count, illegal count}   (16 bits each, saturating)
+//   [63:32]  PC of the trapping instruction
+//   [95:64]  {vector, format, opword valid, 3'b0, opword}
+//   [127:96] {SR, 13'b0, IPL in} at the last missed interrupt (below)
+//   [159:128] PC of the first instruction to commit after the trap (the
+//             handler's entry)
+//   [191:160] PC of the instruction at the last missed interrupt
+//   [223:192] {interrupts taken (wraps), irq_pend, cm_block, halted,
+//              dbl_fault, STOPped, SR mask, cm_pend, wb_v, ipend_r, cm_n_v,
+//              trace_defer, IPL in} -- live, not frozen at the trap
+//   [255:224] {boundaries with an interrupt pending, of those the ones
+//              where it was not taken} (16 bits each, wrapping)
+// (interrupt-gate diag, 2026-11-16: the A26 hang spins in cache with IPL 4
+// over SR mask 1 and takes no interrupt; these say which term blocks it)
+logic [31:0] tr_hpc, tr_pc1, tr_pc2;
+logic [15:0] tr_op1, tr_op2;
+logic        tr_hwait;
+logic [15:0] tr_nirq;
+always_ff @(posedge clk)
+	if (!nreset) tr_nirq <= 0;
+	else if (x_go && take_irq && !(adv_wb && wb_is_exc)) tr_nirq <= tr_nirq + 1'b1;
+// interrupt gate: a boundary where irq_pend holds should take it
+wire        ig_pb   = wb_bound && irq_pend;
+wire        ig_miss = ig_pb && !(x_go && take_irq);
+logic [15:0] ig_npb, ig_nmiss, ig_sr;
+logic [31:0] ig_pc;
+logic  [2:0] ig_ipl;
+always_ff @(posedge clk)
+	if (!nreset) begin
+		ig_npb <= 0; ig_nmiss <= 0; ig_sr <= 0; ig_pc <= 0; ig_ipl <= 0;
+	end
+	else begin
+		if (ig_pb) ig_npb <= ig_npb + 1'b1;
+		if (ig_miss) begin
+			ig_nmiss <= ig_nmiss + 1'b1;
+			ig_pc    <= wb_u.pc;
+			ig_sr    <= {sr_r[15:5], ccr_f};
+			ig_ipl   <= ipl_q;
+		end
+	end
+logic [15:0] tr_ow, tr_ew, tr_nf, tr_ni;
+logic [31:0] tr_owpc, tr_pc;
+logic [15:0] tr_op, tr_xa, tr_cap_ew;
+logic  [7:0] tr_vec;
+logic  [3:0] tr_fmt;
+logic        tr_owv;
+always_ff @(posedge clk) begin
+	if (!nreset) begin
+		tr_nf <= 0; tr_ni <= 0; tr_pc <= 0; tr_op <= 0; tr_xa <= 0;
+		tr_vec <= 0; tr_fmt <= 0; tr_owv <= 0; tr_cap_ew <= 0;
+		tr_ow <= 0; tr_ew <= 0; tr_owpc <= 0;
+		tr_hpc <= 0; tr_pc1 <= 0; tr_pc2 <= 0; tr_op1 <= 0; tr_op2 <= 0;
+		tr_hwait <= 0;
+	end
+	else begin
+		if (tr_hwait && wb_commit && !wb_u.exr) begin
+			tr_hpc   <= wb_u.pc;
+			tr_hwait <= 1'b0;
+		end
+		if (adv_ex && ex_v && ex_is_fp && ex_u.cond == 4'd0) begin
+			tr_ow   <= ex_b[15:0];
+			tr_ew   <= ex_a[15:0];
+			tr_owpc <= ex_u.pc;
+		end
+		if (adv_wb && wb_is_exc && (wb_exc == 8'd11 || wb_exc == 8'd4)) begin
+			if (wb_exc == 8'd11) begin
+				if (tr_nf != 16'hFFFF) tr_nf <= tr_nf + 1'b1;
+			end
+			else if (tr_ni != 16'hFFFF) tr_ni <= tr_ni + 1'b1;
+			tr_pc2    <= tr_pc1;
+			tr_op2    <= tr_op1;
+			tr_pc1    <= tr_pc;
+			tr_op1    <= tr_op;
+			tr_hwait  <= 1'b1;
+			tr_pc     <= wb_u.pc;
+			tr_vec    <= x_vec;
+			tr_fmt    <= x_fmt;
+			tr_owv    <= (tr_owpc == wb_u.pc);
+			tr_op     <= tr_ow;
+			tr_cap_ew <= tr_ew;
+			tr_xa     <= x_addr[15:0];
+		end
+	end
+end
+assign dbg_trap = {ig_npb, ig_nmiss,
+                   tr_nirq, irq_pend, cm_block, halted, dbl_fault,
+                   stopped, irq_mask, cm_pend, wb_v, ipend_r, cm_n_v,
+                   trace_defer, ipl_q,
+                   ig_pc, tr_hpc,
+                   ig_sr, 13'd0, ig_ipl,
+                   tr_vec, tr_fmt, tr_owv, 3'b000, tr_op,
+                   tr_pc,
+                   tr_nf, tr_ni};
 
 // an access error of a MOVEM transfer in an indexed or PC-relative mode,
 // or of a continued MOVEM (also its refetch), sets CM and stacks the EA

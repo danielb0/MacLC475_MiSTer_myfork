@@ -89,6 +89,7 @@ wire        dbg_halted;
 wire        dbg_retire;
 wire [63:0] dbg_pev;
 wire [15:0] dbg_perf;
+wire [255:0] dbg_trap;          // last F-line / illegal trap (perf words 23-26)
 wire [31:0] c_di;
 wire        c_ta_n, c_tea_n, c_tci_n, c_avec_n;
 wire        c_lock_n;
@@ -125,7 +126,7 @@ ap68040 #(
 	.mi_n(c_mi_n), .ta_n_o(), .ta_oe(),
 	.rsto_n(c_rsto_n), .cdis_n(1'b1), .mdis_n(1'b1), .pst(),
 	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_halted(dbg_halted),
-	.dbg_pev(dbg_pev), .dbg_perf(dbg_perf)
+	.dbg_pev(dbg_pev), .dbg_perf(dbg_perf), .dbg_trap(dbg_trap)
 );
 
 quadra_bus040 bus_adapter (
@@ -179,6 +180,7 @@ perf_counters perf (
 	.c_req(cpu_bus_req), .c_ack(cpu_bus_ack), .c_write(cpu_bus_write),
 	.c_instr(cpu_bus_instr), .c_addr(cpu_bus_addr),
 	.m_req(bus_req), .m_ack(bus_ack), .vram_ev(perf_vram_ev),
+	.trap(dbg_trap),
 	.row1(perf_rows[223:160]), .row2(perf_rows[159:128]),
 	.row3(perf_rows[127:64]), .row4(perf_rows[63:0]),
 	.rd_idx(perf_rd_idx), .rd_data(perf_rd_data)
