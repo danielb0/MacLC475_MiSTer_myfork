@@ -70,7 +70,7 @@ localparam CONF_STR = {
 `endif
 	"F0,ROM,Load ROM;",
 	"-;",
-	"O[11:9],Memory,4MB,5MB,6MB,8MB,12MB,20MB,36MB,68MB;",
+	"O[52:49],Memory,4MB,5MB,6MB,8MB,12MB,20MB,36MB,68MB,100MB;",
 `ifndef ETHERNET_OFF
 	"O[8:7],Network interface,eth0,eth1,wlan0,tap0;",
 `endif
@@ -606,13 +606,16 @@ wire [127:0] m_debug_status2;
 localparam RAM_ADDR_BITS = 27;             // address ceiling: 128 MB
 
 // Stock soldered RAM plus SIMM geometry, applied at reset.  68 MB (value 7)
-// puts its 64 MB rank at SDRAM 64-128 MB, so it needs a 128 MB module;
-// smaller modules fall back to 36 MB.
+// and 100 MB (value 8) put a 64 MB rank at SDRAM 64-128 MB, so they need a
+// 128 MB module; smaller modules fall back to 36 MB.  Values past 8 also
+// fall back to 36 MB.
 wire sdram_128 = sdram_sz[15] && sdram_sz[1:0] == 2'd3;
-wire [2:0] ram_cfg_osd = (status[11:9] == 3'd7 && !sdram_128) ? 3'd6 : status[11:9];
+wire [3:0] ram_cfg_osd = (status[52:49] > 4'd8 ||
+                          (status[52:49] >= 4'd7 && !sdram_128)) ?
+                         4'd6 : status[52:49];
 
 // A menu change takes effect at the next reset.
-reg [2:0] ram_cfg = 3'd0;
+reg [3:0] ram_cfg = 4'd0;
 always @(posedge clk_sys) if (reset) ram_cfg <= ram_cfg_osd;
 
 wire        sdr_line_valid;

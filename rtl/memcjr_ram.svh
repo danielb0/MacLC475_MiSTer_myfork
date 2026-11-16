@@ -27,29 +27,41 @@ function automatic [30:0] ram_map;
 		if (selected == 0) begin
 			cell_addr = {4'd0, row[9:0], col[9:0]};
 		end else if (selected == 1 || selected == 2) begin
-			// Representative x4 SIMMs: one or two 1/4/16 MB ranks, or one 64 MB
-			// rank (12x12, 16M x4 parts).  The 64 MB rank lives in the top half
-			// of a 128 MB SDRAM module, clear of the floppy image at 36 MB.
+			// Representative x4 SIMMs: one or two 1/4/16 MB ranks, one 64 MB
+			// rank (12x12, 16M x4 parts), or a 96 MB "tweener" with a 64 MB
+			// rank 1 and a 32 MB rank 2 (12x11, 8M x4 parts).  The 64 MB rank
+			// lives in the top half of a 128 MB SDRAM module, clear of the
+			// floppy image at 36 MB; the 32 MB rank sits below the image.
 			case (ram_cfg)
-				3'd1, 3'd2: begin
+				4'd1, 4'd2: begin
 					cell_addr = {6'd0, row[8:0], col[8:0]};
 					backing = (selected == 1) ? 30'h0100000 : 30'h0140000;
 				end
-				3'd3, 3'd4: begin
+				4'd3, 4'd4: begin
 					cell_addr = {4'd0, row[9:0], col[9:0]};
 					backing = (selected == 1) ? 30'h0100000 : 30'h0200000;
 				end
-				3'd5, 3'd6: begin
+				4'd5, 4'd6: begin
 					cell_addr = {2'd0, row[10:0], col[10:0]};
 					backing = (selected == 1) ? 30'h0100000 : 30'h0500000;
 				end
-				3'd7: begin
+				4'd7: begin
 					cell_addr = {row[11:0], col[11:0]};
 					backing = 30'h1000000;
 				end
+				4'd8: begin
+					if (selected == 1) begin
+						cell_addr = {row[11:0], col[11:0]};
+						backing = 30'h1000000;
+					end else begin
+						cell_addr = {1'b0, row[11:0], col[10:0]};
+						backing = 30'h0100000;
+					end
+				end
 				default: present = 0;
 			endcase
-			if (selected == 2 && ram_cfg != 3'd2 && ram_cfg != 3'd4 && ram_cfg != 3'd6)
+			if (selected == 2 && ram_cfg != 4'd2 && ram_cfg != 4'd4 &&
+			    ram_cfg != 4'd6 && ram_cfg != 4'd8)
 				present = 0;
 		end else present = 0;
 		ram_map = {present, backing + {6'd0, cell_addr}};

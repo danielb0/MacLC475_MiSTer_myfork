@@ -54,8 +54,9 @@ module quadra605
 	input         nreset_vid,
 
 	// 4 MB soldered RAM plus an optional SIMM, latched on reset.
-	// 0=4 MB, 1=5 MB, 2=6 MB, 3=8 MB, 4=12 MB, 5=20 MB, 6=36 MB.
-	input   [2:0] ram_cfg,
+	// 0=4 MB, 1=5 MB, 2=6 MB, 3=8 MB, 4=12 MB, 5=20 MB, 6=36 MB,
+	// 7=68 MB, 8=100 MB.
+	input   [3:0] ram_cfg,
 	input   [1:0] mon_sel,       // DAFB monitor (dafb.sv): 0 = 13" 640x480, 1 = 12" 512x384
 
 	// platform memory beat port
