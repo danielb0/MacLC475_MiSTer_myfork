@@ -232,6 +232,7 @@ module adb_device #(parameter integer CLK_HZ = 25_000_000) (
 			  9'h083: keyData[6:0] <= 7'h62;
 			  9'h111: keyData[6:0] <= 7'h37;
 			  9'h11f: keyData[6:0] <= 7'h3A;
+			  9'h127: keyData[6:0] <= 7'h3A;
 			  9'h14a: keyData[6:0] <= 7'h4B;
 			  9'h15a: keyData[6:0] <= 7'h4C;
 			  9'h169: keyData[6:0] <= 7'h77;
