@@ -109,6 +109,8 @@ localparam CONF_STR = {
 `endif
 
 	"P5SC2,NVR,PRAM image;",
+	"P5-;",
+	"P5O[17],Swap Alt/Win keys,No,Yes;",
 `ifdef SWIM2
 	"D0P5T[16],Retry floppy I/O;",
 `endif
@@ -189,6 +191,12 @@ video_control video_control (
 	.control_v({ar, scale_v, mt32_info_v, video_diagnostic_v})
 );
 wire [10:0] ps2_key;
+// "Swap Alt/Win keys": Alt gives Option and the Windows keys Command
+// (Mac labelling) instead of the positional PlusToo default.
+wire [8:0]  key_sc = ps2_key[8:0];
+wire [10:0] ps2_key_m = {ps2_key[10:9], !status[17] ? key_sc :
+                         key_sc == 9'h011 ? 9'h11F : key_sc == 9'h111 ? 9'h127 :
+                         key_sc == 9'h11F ? 9'h011 : key_sc == 9'h127 ? 9'h111 : key_sc};
 wire [24:0] ps2_mouse;
 wire [31:0] joystick_0;                    // [3:0] R L D U, [11:4] the J buttons
 wire [15:0] joystick_l_analog_0;           // {Y, X}, signed, up and left negative
@@ -738,7 +746,7 @@ quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS
 	.cd_snd_r(cd_snd_r),
 	.AUDIO_R(mac_audio_r),
 
-	.ps2_key(ps2_key),
+	.ps2_key(ps2_key_m),
 	.ps2_mouse(ps2_mouse),
 	.timestamp(TIMESTAMP),
 	.pram_h_we(pram_h_we),
