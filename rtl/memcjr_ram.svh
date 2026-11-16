@@ -29,9 +29,9 @@ function automatic [30:0] ram_map;
 		end else if (selected == 1 || selected == 2) begin
 			// Representative x4 SIMMs: one or two 1/4/16 MB ranks, one 64 MB
 			// rank (12x12, 16M x4 parts), or a 96 MB "tweener" with a 64 MB
-			// rank 1 and a 32 MB rank 2 (12x11, 8M x4 parts).  The 64 MB rank
-			// lives in the top half of a 128 MB SDRAM module, clear of the
-			// floppy image at 36 MB; the 32 MB rank sits below the image.
+			// rank 1 and a 32 MB rank 2.  The 64 MB rank lives in the top half
+			// of a 128 MB SDRAM module, clear of the floppy image at 36 MB;
+			// the 32 MB rank sits below the image.
 			case (ram_cfg)
 				4'd1, 4'd2: begin
 					cell_addr = {6'd0, row[8:0], col[8:0]};
@@ -54,7 +54,9 @@ function automatic [30:0] ram_map;
 						cell_addr = {row[11:0], col[11:0]};
 						backing = 30'h1000000;
 					end else begin
-						cell_addr = {1'b0, row[11:0], col[10:0]};
+						// Mod-32 MB decode: the ROM places this rank at 68 MB, so
+						// it spans a 32 MB boundary and must ignore A25.
+						cell_addr = {1'b0, a[24:2]};
 						backing = 30'h0100000;
 					end
 				end
