@@ -4,8 +4,8 @@ Source: `alanswx/MacQuadra800_MiSTer`, `pipelined-040-small33`, revision `821224
 Donor hashes and adaptation flags are in `docs/imports.json`.
 Generated tables and the license are preserved.
 
-`MacLC475.qpf` selects this CPU through `quadra_cpu040.sv` and
-`quadra_bus040.sv`. It runs 1:1 at 25 MHz with 4 KiB caches and no FPU.
+`MacLC475.qpf` selects this CPU through `cpu040.sv` and
+`bus040.sv`. It runs 1:1 at 25 MHz with 4 KiB caches and no FPU.
 Dual issue and BTIC are disabled for the initial size candidate.
 Local adaptations implement LC040 EA-only decoding, format-4 entry/RTE,
 no-FPU exception/store handling and earlier scalar DMU dispatch.

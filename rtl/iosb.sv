@@ -259,7 +259,7 @@ wire [7:0] nubus_irqs = {1'b1, ~vbl_irq, 5'b11111, ~sonic_irq};  // bit 6 = inte
 wire       slot_any   = (nubus_irqs & 8'h79) != 8'h79;
 
 reg vbl_d, scsi_d, drq_d, asc_d, slot_d;
-// The ASC interrupt: the port comes in from quadra800.sv (tied 0 there) and
+// The ASC interrupt: the port comes in from lc475.sv (tied 0 there) and
 // the real source is the EASC below. Without it the Sound Manager fills the
 // FIFO once and is never told to refill, so a sound plays for 1024 samples
 // (46 ms) and stops.
@@ -412,7 +412,7 @@ ncr53c96 #(.CDROM(CDROM), .CLK_HZ(SYS_CLK_HZ)) scsi (
 //
 //   *** DEBUG ONLY.  COMPILED OUT UNLESS `SCSI_TRACE` IS DEFINED. ***
 //
-// Enable it by uncommenting the VERILOG_MACRO line in MacQuadra800.qsf; the build
+// Enable it with a SCSI_TRACE VERILOG_MACRO line in MacLC475.qsf; the build
 // script then prints a DEBUG BUILD banner so a traced bitstream cannot be
 // mistaken for a release one.  When enabled this takes over the guest's modem
 // port outright (scc_txd_a below), so it must never ship.
@@ -1109,7 +1109,7 @@ always @(posedge clk) begin
 			astate <= A_IDLE;
 		end
 		// A wedged beat used to sit here forever waiting for sdma_valid, and
-		// nothing upstream could recover: no iosb_ack meant quadra800.sv stayed
+		// nothing upstream could recover: no iosb_ack meant lc475.sv stayed
 		// in S_IOSB, which has no path back to S_IDLE, so the machine deadlocked
 		// even though the CPU escaped via its own stall watchdog.  Release the
 		// beat with a fault instead -- that is what the real IOSB does (holds

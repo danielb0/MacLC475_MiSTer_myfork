@@ -67,7 +67,7 @@ module ncr53c96
 	// ID 3 stops answering selection, is_cd is a constant 0 so the CD command
 	// layer synthesizes away, and cd_audio is not instantiated.  For CPU work
 	// that needs the ALMs back; set it from the qsf (CDROM_OFF macro in
-	// MacQuadra800.sv).
+	// MacLC475.sv).
 	parameter CDROM = 1,
 	parameter CLK_HZ = 25_000_000
 )

@@ -45,7 +45,7 @@ wire [31:2] vram_fast_addr;  // vram_ddr3's fast read-hit port
 wire        vram_fast_take, vram_fast_hit;
 wire [31:0] vram_fast_data;
 
-quadra605 #(.CDROM(0), .SONIC(0)) dut (
+lc475 #(.CDROM(0), .SONIC(0)) dut (
     .clk(clk), .nreset(nreset), .cuda_power_reset_n(nreset), .cuda_host_reset_n(nreset),
     .ce(1'b1), .clk_vid(clk), .nreset_vid(nreset), .ram_cfg(4'd0), .mon_sel(2'd0),
     .dbg_sw(3'd0), .eth_ena(1'b0), .adb_diagnostic(1'b0), .video_diagnostic(1'b0),

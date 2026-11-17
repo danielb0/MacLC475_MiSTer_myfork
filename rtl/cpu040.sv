@@ -1,6 +1,6 @@
 // Staged pipelined CPU adapter. Machine qualification is pending.
 
-module quadra_cpu040
+module cpu040
 #(
 	parameter AP040_HAS_FPU = 0,
 	// Lean Q800 donor: a two-entry posted-write queue below the caches for
@@ -122,7 +122,7 @@ ap68040 #(
 	.dbg_pev(dbg_pev), .dbg_perf(dbg_perf), .dbg_trap(dbg_trap)
 );
 
-quadra_bus040 bus_adapter (
+bus040 bus_adapter (
     .clk(clk), .nreset(nreset), .stall_hold(stall_hold),
     .c_a(c_a), .c_do(c_do), .c_a_oe(c_a_oe), .c_rw_n(c_rw_n),
     .c_ts_n(c_ts_n), .c_siz(c_siz), .c_tt(c_tt), .c_tm(c_tm),

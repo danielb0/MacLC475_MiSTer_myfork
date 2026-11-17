@@ -3,12 +3,12 @@ set_global_assignment -name SYSTEMVERILOG_FILE MacLC475.sv
 set_global_assignment -name QIP_FILE rtl/pll.qip
 set_global_assignment -name VERILOG_FILE rtl/pll_video.v
 set_global_assignment -name QIP_FILE rtl/ap68040_faster/rtl/ap68040.qip
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra_bus040.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra_cpu040.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/bus040.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu040.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/perf_counters.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_store_buffer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_bus32.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra605.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/lc475.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/startup_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video_control.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rate_enable.sv

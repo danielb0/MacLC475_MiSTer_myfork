@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module tb_quadra_cpu040;
+module tb_cpu040;
 reg clk = 0, nreset = 0;
 always #20 clk = ~clk;
 wire req, wr, instr, halted, stall;
@@ -12,7 +12,7 @@ reg [31:0] saved_addr;
 reg [1:0] saved_size;
 reg saved_write;
 
-quadra_cpu040 #(.AP040_HAS_FPU(0)) dut (
+cpu040 #(.AP040_HAS_FPU(0)) dut (
     .clk(clk), .nreset(nreset), .ce(1'b1), .ipl(3'b111),
     .ipl_autovector(1'b1), .berr(1'b0), .stall_hold(1'b0), .dbg_stall_flt(stall),
     .cache_line_valid(1'b0), .cache_line_tag(28'd0), .cache_line_data(128'd0),

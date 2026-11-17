@@ -20,7 +20,7 @@
 //    * the guest-RAM DMA engine: the ARM posts an ordered list of up to eight
 //      {dir, byte address, byte count} ops; the engine moves longword beats
 //      between the XFER staging area and guest RAM through the machine's own
-//      service FSM (quadra800.sv), first/last write beats under byte enables.
+//      service FSM (lc475.sv), first/last write beats under byte enables.
 //
 //  Guest map (MAME macquadra800.cpp / QEMU q800.c agree):
 //    $5000A000-$5000A0FF  64 x 16-bit registers, 4-byte stride, data on D15-D0

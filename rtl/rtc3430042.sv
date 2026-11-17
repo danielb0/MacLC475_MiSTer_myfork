@@ -9,7 +9,7 @@
 //  PRAM powers up zeroed — the ROM sees an invalid checksum and writes
 //  its defaults, exactly like a Mac with a dead battery — unless the
 //  platform loads a saved image through the host port below before the
-//  machine leaves reset (MacQuadra800.sv, the .nvr image on hps_io slot 2).
+//  machine leaves reset (MacLC475.sv, the .nvr image on hps_io slot 2).
 //============================================================================
 
 module rtc3430042

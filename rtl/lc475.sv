@@ -1,5 +1,5 @@
 //============================================================================
-//  quadra605 - stock LC040 and MEMCjr machine integration.
+//  lc475 - stock LC040 and MEMCjr machine integration.
 //  RAM, ROM and VRAM share the platform beat port.
 //
 //  Physical map:
@@ -17,7 +17,7 @@
 //  memsel=ROM must be discarded but still acked.
 //============================================================================
 
-module quadra605
+module lc475
 #(
 	parameter AP040_HAS_FPU = 0,              // stock 68LC040
 	parameter CLK_HZ        = 25_000_000,
@@ -342,7 +342,7 @@ startup_probe startup (
 );
 wire [223:0] perf_rows;
 `ifdef CPU_AP68040
-quadra_cpu040 #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
+cpu040 #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 `else
 wombat_cpu #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 `endif
@@ -854,7 +854,7 @@ wire dma_take = (SONIC != 0) && dma_req && !dma_ack && !walker_pend &&
 // for the read behind it a clock sooner: QuickDraw's read/modify/write
 // loops wait for exactly this.  A spanning write keeps the registered
 // acknowledge of its second half.  This needs the store buffer in
-// quadra_cpu040: it holds the acknowledge of an unbuffered write, which
+// cpu040: it holds the acknowledge of an unbuffered write, which
 // arrives in the CPU's TS clock, for the clock TA is sampled in.
 `ifdef AP040_STORE_BUFFER_OFF
 localparam VRAM_WR_NOW = 0;

@@ -24,7 +24,7 @@ cannot be added to the present memory allocation.
 | CUDA / ADB / RTC | Firmware-running HC05, GPIO/timers, VIA handshakes, ADB keyboard/mouse, PRAM host persistence | Broader reset, time, input-device and persistence qualification pending. Some physical board signals are tied inactive (`rtl/iosb.sv:174-184`). |
 | SCC / serial | Register model, UART-backed paths, baud generation and loopback | No LocalTalk synchronous reception; printer RX tied high (`rtl/scc.v:1022`, `MacLC475.sv:708`). External clock/status behavior simplified. Serial/MIDI hardware qualification pending. |
 | SCSI | Controller registers/FIFO/counts, selection/transfer phases, pseudo-DMA, virtual HDD/CD targets | Virtual target implementation rather than a physical SCSI bus (`rtl/ncr53c96.sv:2-7`). Supported operations/error recovery need qualification; not every bus mode or arbitrary target is modeled. |
-| Expansion | Address decoding rejects absent devices | No PDS/card target or active expansion-slot interrupt source (`rtl/quadra605.sv:605-623`, `rtl/iosb.sv:258`). |
+| Expansion | Address decoding rejects absent devices | No PDS/card target or active expansion-slot interrupt source (`rtl/lc475.sv:605-623`, `rtl/iosb.sv:258`). |
 
 PrimeTime contains SWIM II, VIAs, I/O steering and sound logic; SCC and SCSI
 are separate chips. Apple documents sound input plus stereo output buffers

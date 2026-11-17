@@ -16,7 +16,7 @@ module vram_ddr3 #(
 	input             reset,           // synchronous reset on clk_sys
 
 	//---------------------------------------------------------
-	// CPU / quadra800 bus interface (clk_sys)
+	// CPU / lc475 bus interface (clk_sys)
 	//---------------------------------------------------------
 	input             mem_req,
 	input             mem_is_vram,
@@ -582,7 +582,7 @@ always @(posedge clk_sys) begin
 			pf_want <= 1'b0;
 		pf_mark <= pf_mark & ~pe_pf_ways;
 
-		// Normal write handshake with quadra800 bus
+		// Normal write handshake with lc475 bus
 		if (mem_req && mem_is_vram && mem_write) begin
 			vram_wr_ph <= !vram_wr_ph;
 			if (vram_wr_ph) vram_ack <= 1'b1;

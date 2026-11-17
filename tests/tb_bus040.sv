@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module tb_quadra_bus040;
+module tb_bus040;
 reg clk = 0, nreset = 0;
 always #20 clk = ~clk;
 reg [31:0] a = 0, dout = 32'h11223344, rdata = 32'hAABBCCDD;
@@ -12,7 +12,7 @@ wire [2:0] fc;
 wire [31:0] addr, wdata, din;
 integer checks = 0;
 
-quadra_bus040 #(.STALL_BITS(4)) dut (
+bus040 #(.STALL_BITS(4)) dut (
     .clk(clk), .nreset(nreset), .stall_hold(stall_hold),
     .c_a(a), .c_do(dout), .c_a_oe(a_oe), .c_rw_n(rw_n),
     .c_ts_n(ts_n), .c_siz(siz), .c_tt(tt), .c_tm(tm),

@@ -1,7 +1,7 @@
 //============================================================================
 //  MacLC475 - Macintosh LC 475 / Quadra 605.
 //  TODO: Qualify MEMCjr/PrimeTime timing and the optional SWIM II path.
-//  Platform memory contract (see rtl/quadra605.sv):
+//  Platform memory contract (see rtl/lc475.sv):
 //  one ack-based beat port with mem_memsel (0 RAM, 1 ROM, 2 VRAM) plus a
 //  registered 1-cycle video scanout port.  Here:
 //   - RAM (4-36 MB) lives in SDRAM; ROM (1 MB) lives in DDR3.
@@ -680,7 +680,7 @@ wire [63:0] eth_mem_wdata;
 reg         eth_mem_accept = 1'b0;
 wire        eth_mem_rvalid;
 
-quadra605 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS), .CDROM(CDROM_EN), .SONIC(SONIC_EN)) machine (
+lc475 #(.AP040_HAS_FPU(0), .CLK_HZ(SYS_CLK_HZ), .RAM_ADDR_BITS(RAM_ADDR_BITS), .CDROM(CDROM_EN), .SONIC(SONIC_EN)) machine (
 `ifdef SWIM2
 	.floppy_sel(floppy_sel), .floppy_write(floppy_write), .floppy_addr(floppy_addr),
 	.floppy_wdata(floppy_wdata), .floppy_rdata(floppy_rdata),
@@ -1182,7 +1182,7 @@ reg        vram_ph;                        // port-A phase: 0 capture, 1 deliver
 wire [16:0]  va_addr     = vram_map(mem_addr[18:2]);
 wire [16:0]  vb_addr     = vram_map(vid_addr[18:2]);
 // a beat writes in its capture clock; a direct write (the store buffer's
-// drain, quadra800 bus_vram_direct) is a one-clock pulse with mem_req low
+// drain, lc475 bus_vram_direct) is a one-clock pulse with mem_req low
 wire         va_we       = (mem_req && mem_is_vram && mem_write && !vram_ph) || mem_vram_wp;
 assign       vram_ack    = mem_req && mem_is_vram && vram_ph;
 
@@ -1337,7 +1337,7 @@ reg [15:0] ioctl_d;
 reg        ddr_wait_data;                  // read issued, awaiting DOUT_READY
 // The ROM's retained line: every ROM read fetches its whole 16-byte line in
 // one two-beat burst, and the machine answers the line's other longwords from
-// here (quadra800 bus_rom_match) -- the I-cache's fill of a ROM line is one
+// here (lc475 bus_rom_match) -- the I-cache's fill of a ROM line is one
 // DDR3 round trip instead of four.  ROM changes only by a boot0.rom download.
 reg [127:0] rom_line;                      // longword 0 in [127:96]
 reg  [19:4] rom_line_tag;
