@@ -35,10 +35,10 @@ NAMES = [
     "vram_rd_beats", "vram_rd_cyc", "vram_wr_beats", "vram_wr_cyc",
     "m_req_cyc", "m_noack_cyc",
     # page 5: vram_ddr3
-    "v_hit", "v_fill", "vrd_fast", "vrd_gen", "v_wait_dma",
+    "v_hit", "v_fill", "ram_rd_ci", "vrd_gen", "v_wait_dma",
     "vrd_gen_split",
     # page 6
-    "walks", "vst_post", "vst_slow", "pflush",
+    "walks", "ram_wr_ci", "vst_slow", "pflush",
     "ic_inv", "cpush_lines",
 ]
 IDX = {n: i for i, n in enumerate(NAMES)}
@@ -146,10 +146,15 @@ def report(ds, lo, hi):
     vr = g("vram_rd_beats")
     print("  VRAM hits+fills vs reads %d vs %d" % (g("v_hit") + g("v_fill"),
                                                    vr))
-    print("  VRAM reads fast / general (split)  %d / %d (%d)" % (
-        g("vrd_fast"), g("vrd_gen"), g("vrd_gen_split")))
-    print("  VRAM stores posted / slow          %d / %d" % (
-        g("vst_post"), g("vst_slow")))
+    print("  VRAM reads general (split)         %d (%d)" % (
+        g("vrd_gen"), g("vrd_gen_split")))
+    print("  VRAM stores                        %d" % g("vst_slow"))
+    # (slots 32 and 37: RAM data beats with CIOUT; captures from before
+    # diag/ram-ci-counters hold frame buffer counts there instead)
+    print("  RAM data read beats CI / all       %d / %d" % (
+        g("ram_rd_ci"), g("b_ram_rd")))
+    print("  RAM data write beats CI / all      %d / %d" % (
+        g("ram_wr_ci"), g("b_ram_wr")))
     if vr:
         print("  VRAM read cycles / beat  %.2f" % (g("vram_rd_cyc") / vr))
     vw = g("vram_wr_beats")
