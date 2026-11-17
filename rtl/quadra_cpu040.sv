@@ -6,19 +6,9 @@ module quadra_cpu040
 	// Lean Q800 donor: a two-entry posted-write queue below the caches for
 	// RAM and VRAM-window stores (wombat_store_buffer). 0 restores direct writes.
 `ifdef AP040_STORE_BUFFER_OFF
-	parameter AP040_STORE_BUFFER = 0,
+	parameter AP040_STORE_BUFFER = 0
 `else
-	parameter AP040_STORE_BUFFER = 1,
-`endif
-	// The DMU retires a plain store to the VRAM window ($F900-$F91F) at WB
-	// and frees its bus engine at the grant, instead of waiting for the
-	// bus to finish (Quadra 800's AP040_VRAM_POST).  Safe while a VRAM
-	// write never faults: vram_ddr3 queues it, and a full queue only holds
-	// the grant.  0 restores the precise path.
-`ifdef AP040_VRAM_POST_OFF
-	parameter AP040_VRAM_POST = 0
-`else
-	parameter AP040_VRAM_POST = 1
+	parameter AP040_STORE_BUFFER = 1
 `endif
 )
 (
@@ -105,7 +95,10 @@ ap68040 #(
 	.DUAL(0), .BTIC(0),
 	// only RAM ($0-$3FFFFFFF) and the ROM window ($4xxxxxxx) are cacheable:
 	// everything else is a device, never read speculatively
-	.PA_IO_SERIAL(1), .PA_VRAM_POST(AP040_VRAM_POST),
+	// No posted VRAM stores (PA_VRAM_POST): with them on, the core hung
+	// under load (Speedometer, 100 MB / 32-bit) and they gained no measured
+	// speed.  This also keeps the direct VRAM read and MOVE16 paths off.
+	.PA_IO_SERIAL(1), .PA_VRAM_POST(0),
 	.PA_C0_MASK(32'hC000_0000), .PA_C0_MATCH(32'h0000_0000),
 	.PA_C1_MASK(32'hF000_0000), .PA_C1_MATCH(32'h4000_0000)
 ) cpu (
