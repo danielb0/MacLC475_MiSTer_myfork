@@ -120,7 +120,7 @@ initial begin
         wr(5, 0); guest_reset = 1; cycle; guest_reset = 0; ce = 0;
         allow_writes = 1;
         while (!save_valid) cycle;
-        check(words, 256); check(save_addr, expected_base); check(buffer_owned, 1);
+        check(words, 256); check(save_addr, expected_base); check(buffer_owned, 0);
         save_ready = 1; cycle; save_ready = 0; allow_writes = 0;
         ce = 1; repeat (3) cycle;
         wr(7, 8'h92); wr(5, 8'h44); wr(7, 1); wr(6, 1);

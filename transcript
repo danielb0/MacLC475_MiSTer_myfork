@@ -1,0 +1,32 @@
+# vsim -c -lib C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work tb_swim2_catalog -do "run -all; quit -f" 
+# Start time: 11:23:08 on Nov 17,2026
+# Loading sv_std.std
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.tb_swim2_catalog
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_subsystem
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_control
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_data
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_drive
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.mfm_track_encoder
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.floppy_track_encoder
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_mfm_write
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_media
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.mfm_write_decoder
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.floppy_track_decoder
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_write_commit
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_host_persistence
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_persistence
+# Loading C:/Users/Elle/AppData/Local/Temp/claude/572289131d956c05/d64acfd1-51d1-49c8-88e0-d5b6fcc01e53/scratchpad/oldrtl/work.swim2_host
+# run -all
+# TRACE: read-ID anchor LBA 26
+# TRACE: requested LBA 26 seed 60
+# TRACE: decoded LBA 26
+# TRACE: committed LBA 26
+# TRACE: read-ID anchor LBA 28
+# TRACE: requested LBA 28 seed 61
+# ** Fatal: check 12427 at 2236500000: got 0000000000000001 expected 0000000000000000
+#    Time: 2236500 ns  Scope: tb_swim2_catalog.check File: tests/tb_swim2_catalog.sv Line: 79
+# ** Note: $finish    : tests/tb_swim2_catalog.sv(79)
+#    Time: 2236500 ns  Iteration: 1  Instance: /tb_swim2_catalog
+# End time: 11:23:10 on Nov 17,2026, Elapsed time: 0:00:02
+# Errors: 1, Warnings: 0

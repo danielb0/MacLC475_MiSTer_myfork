@@ -50,7 +50,7 @@ integer trace_decodes = 0, trace_commits = 0, trace_starts = 0;
 always @(posedge clk) begin
     if (nreset) begin
         if (trace_events[0]) begin
-            check(trace_context[7:3], sequence_lba[sequence_index+(buffer_owned ? 1 : 0)] % 18 + 1);
+            check(trace_context[7:3], sequence_lba[sequence_index] % 18 + 1);
             check(trace_context[2], 1); check(trace_context[31:24], mode);
             trace_starts = trace_starts + 1;
         end
@@ -224,10 +224,10 @@ task host_transfer;
         while (!persistence.durable_req) cycle;
     end
 endtask
-task host_complete;
+task host_complete(input integer done_index);
     integer word_index;
     begin
-        check(sd_lba, saved_lba); check(retired, sequence_index);
+        check(sd_lba, saved_lba); check(retired, done_index);
         for (word_index = 0; word_index < 256; word_index = word_index + 1) begin
             sd_buff_addr = word_index; cycle; check(sd_buff_din, snapshot[word_index]);
             file_data[saved_lba*512+word_index*2] = snapshot[word_index][7:0];
@@ -235,8 +235,9 @@ task host_complete;
         end
         word_io(16'h09, response); word_io(token_lo, response); word_io(token_hi, response);
         word_io(0, response); close_io;
-        while (buffer_owned || persist_busy) cycle;
-        check(fault, 0); check(retired, sequence_index+1);
+        // The next sector's commit may start as soon as this save retires.
+        while (retired == done_index) cycle;
+        check(fault, 0); check(retired, done_index+1);
         $display("TRACE: durable LBA %0d", saved_lba);
     end
 endtask
@@ -252,30 +253,31 @@ initial begin
     wr(7, 8'h82);
     for (sequence_index = 0; sequence_index < 6; sequence_index = sequence_index + 1) begin
         target_lba = sequence_lba[sequence_index]; seed = 8'h60 + sequence_index;
-        read_anchor(target_lba, 1); write_sector; host_transfer;
-        if (sequence_index < 5) begin
-            // Capture the next ID while the previous sector still awaits its host result.
-            read_anchor(sequence_lba[sequence_index+1], 1);
-            check(buffer_owned, 1); check(retired, sequence_index);
-            start_write;
-            while (mode[3]) cycle;
-            check(write_fault, 1); check(dut.controller.data_path.count, 1);
-            rd(2, got); check(got, 1);
-            check(decoded, sequence_index+1); check(committed, sequence_index+1);
-            check(sd_lba, saved_lba); check(buffer_owned, 1);
-            $display("TRACE: busy write rejected for LBA %0d", sequence_lba[sequence_index+1]);
-        end else begin
+        read_anchor(target_lba, 1);
+        // Write while the previous sector still awaits its host result. The
+        // host's write and fsync take milliseconds; the guest must not see
+        // underrun (.Sony wrUnderrun, -74) for the next sector meanwhile.
+        write_sector;
+        if (sequence_index > 0) begin
+            // Decoded, but its commit waits for the persistence snapshot.
+            check(committed, sequence_index); check(buffer_owned, 1);
+            check(retired, sequence_index-1);
+            $display("TRACE: write accepted during host save of LBA %0d", saved_lba);
+            host_complete(sequence_index-1);
+        end
+        host_transfer;
+        if (sequence_index == 5) begin
             // A guest eject must wait for the last durable host result.
             command(7); repeat (10) cycle;
-            check(loaded, 1); check(releases, 0); check(buffer_owned, 1);
+            check(loaded, 1); check(releases, 0); check(save_valid, 1);
+            host_complete(5);
         end
-        host_complete;
         for (i = 0; i < 512; i = i + 1) expected_file[target_lba*512+i] = pattern(i, seed);
     end
     while (loaded) cycle;
     check(releases, 1); check(decoded, 6); check(committed, 6); check(retired, 6);
 `ifdef SWIM2_TRACE
-    check(trace_decodes, 6); check(trace_commits, 6); check(trace_starts, 11);
+    check(trace_decodes, 6); check(trace_commits, 6); check(trace_starts, 6);
 `endif
     for (i = 0; i < 18432; i = i + 1) begin
         check(file_data[i], expected_file[i]); check(ram[i], expected_file[i]);

@@ -133,7 +133,7 @@ task host_transfer;
             sd_buff_addr = j; cycle;
             check(sd_buff_din, {pattern(j*2+1), pattern(j*2)});
             cached_file[j] = sd_buff_din;
-            check(buffer_owned, 1); check(save_ready, 0); check(flush_ack, 0);
+            check(save_valid, 1); check(buffer_owned, 0); check(save_ready, 0); check(flush_ack, 0);
         end
         sd_ack = 0; cycle;
         while (!persistence.durable_req) cycle;
@@ -143,7 +143,7 @@ endtask
 task host_complete(input fail_write);
     begin
         word_io(16'h09, response); word_io(token_lo, response); word_io(token_hi, response);
-        check(buffer_owned, 1); check(mounted, 1);
+        check(save_valid, 1); check(buffer_owned, 0); check(mounted, 1);
         if (!fail_write)
             for (j = 0; j < 256; j = j + 1) durable_file[j] = cached_file[j];
         word_io({15'd0, fail_write}, response); close_io;
@@ -166,7 +166,7 @@ initial begin
     check(notifications, 0); check(mount_ready, 0);
     host_complete(1);
     repeat (8) begin
-        cycle; check(buffer_owned, 1); check(mounted, 1);
+        cycle; check(save_valid, 1); check(buffer_owned, 0); check(mounted, 1);
         check(mount_ready, 0); check(release_done, 0); check(flush_ack, 0);
     end
     check(notifications, 0);
