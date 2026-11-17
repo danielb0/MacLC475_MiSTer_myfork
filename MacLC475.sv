@@ -67,6 +67,7 @@ localparam CONF_STR = {
 	"SC4,ISOTO*CUEBINCHD,CD-ROM (ID 3);",
 `ifdef SWIM2
 	"S6,DSKIMGIMA,Floppy disk;",
+	"O[18],Floppy lock,Off,On;",
 `endif
 	"F0,ROM,Load ROM;",
 	"-;",
@@ -1033,13 +1034,20 @@ wire [3:0]  sdr_beat_be;
 wire [31:0] sdr_beat_wdata, sdr_beat_rdata;
 
 `ifdef SWIM2
+// Floppy lock acts like the disk's write-protect tab: the loader samples it
+// together with the image's read-only flag when a disk is inserted, so
+// toggling it affects the next insert, never the disk the guest has mounted.
+// No reset needed, so it stays out of settings_pending.
+wire floppy_lock = status[18];
+
 // Guest reset drains media ownership; only PLL loss aborts the storage path.
 swim2_platform #(.CLK_HZ(SYS_CLK_HZ)) floppy (
 	.clk(clk_sys), .nreset(pll_locked), .guest_reset(reset), .init(~pll_locked),
 	.sdram_sz(sdram_sz), .EXT_BUS(floppy_ext_bus),
 	.sel(floppy_sel), .write(floppy_write), .addr(floppy_addr),
 	.wdata(floppy_wdata), .rdata(floppy_rdata),
-	.img_mounted(img_mounted[VD_FLOPPY]), .img_size(img_size), .img_readonly(img_readonly),
+	.img_mounted(img_mounted[VD_FLOPPY]), .img_size(img_size),
+	.img_readonly(img_readonly | floppy_lock),
 	.sd_lba(sd_lba[VD_FLOPPY]), .sd_rd(sd_rd[VD_FLOPPY]), .sd_wr(sd_wr[VD_FLOPPY]),
 	.sd_ack(sd_ack[VD_FLOPPY]), .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout),
 	.sd_buff_wr(sd_buff_wr), .sd_buff_din(sd_buff_din[VD_FLOPPY]), .fault(floppy_fault),
