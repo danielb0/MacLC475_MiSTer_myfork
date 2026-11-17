@@ -1811,11 +1811,17 @@ always_ff @(posedge clk) begin
 		end
 	end
 end
+// diag 2026-11-16: PC of the last completed instruction, so a hang can be
+// located by reading this word a few times.  Takes the slot of tr_hpc.
+logic [31:0] live_pc;
+always_ff @(posedge clk)
+	if (!nreset) live_pc <= 0;
+	else if (wb_bound) live_pc <= wb_u.pc;
 assign dbg_trap = {ig_npb, ig_nmiss,
                    tr_nirq, irq_pend, cm_block, halted, dbl_fault,
                    stopped, irq_mask, cm_pend, wb_v, ipend_r, cm_n_v,
                    trace_defer, ipl_q,
-                   ig_pc, tr_hpc,
+                   ig_pc, live_pc,
                    ig_sr, 13'd0, ig_ipl,
                    tr_vec, tr_fmt, tr_owv, 3'b000, tr_op,
                    tr_pc,

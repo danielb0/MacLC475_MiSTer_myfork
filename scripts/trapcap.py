@@ -8,7 +8,7 @@ print("F-line traps %d, illegal traps %d" % (c[0] >> 16, c[0] & 0xFFFF))
 print("PC       %08X" % c[1])
 print("vector   %d  format %X  opword valid %d" % (c[2] >> 24, (c[2] >> 20) & 0xF, (c[2] >> 19) & 1))
 print("opword   %04X" % (c[2] & 0xFFFF))
-print("handler  %08X" % c[4])
+print("live PC  %08X" % c[4])
 s = c[6]
 print("irqs taken %d  IPL in %d  SR mask %d  stopped %d  wb_v %d" % (
     s >> 16, s & 7, (s >> 8) & 7, (s >> 11) & 1, (s >> 6) & 1))

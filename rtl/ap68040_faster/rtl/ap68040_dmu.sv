@@ -976,7 +976,8 @@ wire wb_fs = wb_st && m4.split && m4.x.ok && !m4.x.flt && m4.x.hit && m4.x.cm ==
 // locked RMW or split word keeps the normal precise path.  A MOVE16 line
 // store is posted the same way, its data copied to pl_line (the BIU drives a
 // line from the requester's data until done; one such store at a time).
-wire wb_vram_post = PA_VRAM_POST && PA_IO_SERIAL && wb_st &&
+// diag 2026-11-16: RMW stores back off the posted path (undo f7d305a)
+wire wb_vram_post = PA_VRAM_POST && PA_IO_SERIAL && wb_st && (m4.r.mem == M_ST) &&
                     !m4.split && m4.x.ok && !m4.x.flt && (!dc_en || !m4.x.hit) &&
                     m4.x.cm[1] && !m4.r.lock && (m4.r.ack == 2'd0) &&
                     ((m4.r.msz == SZ_Q) ? ((MV16_FAST != 0) && !pl_act) :
