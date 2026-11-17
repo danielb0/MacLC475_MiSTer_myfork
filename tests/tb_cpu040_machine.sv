@@ -356,8 +356,9 @@ initial begin
     store('h2000, 'hDEADBEEF);
     check_read('h2000, 'hDEADBEEF);
 
-    // Posted VRAM stores (AP040_VRAM_POST), after the Quadra 800's adapter
-    // cases.  A MEMCjr holding-latch write ($5000E07C, the value it already
+    // VRAM stores, after the Quadra 800's adapter cases (written for its
+    // posted VRAM stores, which this core no longer has; the ordering
+    // checks still hold).  A MEMCjr holding-latch write ($5000E07C, the value it already
     // has) is the device marker: every VRAM write before it must have
     // reached the VRAM port by then (vram_marker_expect, checked below).
     emit16('h41F9); emit32('hF9009000);       // LEA $F9009000,A0

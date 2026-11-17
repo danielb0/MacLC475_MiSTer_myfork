@@ -36,9 +36,6 @@ module ap68040
 	parameter bit         S1_LDTK      = 1,      // ... a load companion at a BTB-taken target (a debug switch)
 	// platform cacheability (ap68040_dmu): 0 = as upstream
 	parameter bit          PA_IO_SERIAL = 0,
-	// Quadra's on-chip, non-faulting VRAM: retire an ordinary store once
-	// captured by the DMU bus engine. Other hosts retain normal bus timing.
-	parameter bit          PA_VRAM_POST = 0,
 	parameter logic [31:0] PA_C0_MASK = 32'h0, PA_C0_MATCH = 32'h0,
 	parameter logic [31:0] PA_C1_MASK = 32'h0, PA_C1_MATCH = 32'h0
 )(
@@ -321,7 +318,7 @@ ap68040_backend #(.HAS_FPU(HAS_FPU), .FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_
 );
 
 logic [14:0] dm_perf;
-ap68040_dmu #(.DC1_ATC(DC1_ATC), .PA_IO_SERIAL(PA_IO_SERIAL), .PA_VRAM_POST(PA_VRAM_POST),
+ap68040_dmu #(.DC1_ATC(DC1_ATC), .PA_IO_SERIAL(PA_IO_SERIAL),
 	.PA_C0_MASK(PA_C0_MASK), .PA_C0_MATCH(PA_C0_MATCH),
 	.PA_C1_MASK(PA_C1_MASK), .PA_C1_MATCH(PA_C1_MATCH)) dmu (
 	.clk(clk), .nreset(nreset),

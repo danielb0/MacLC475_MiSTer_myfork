@@ -99,13 +99,13 @@ always @(posedge clk) begin
                  dut.cpu.cpu.biu.st.name(), dut.cpu.c_ts_n, dut.cpu.c_ta_n,
                  dut.bus_req, dut.bus_ack, dut.bus_write, dut.bus_addr, dut.svc,
                  mem_req, mem_ack, mem_vram_wp);
-        $display("TRACEP %0d v=%b%b%b%b mem2=%0d mem4=%0d adv=%b%b%b%b d2done=%b gnt=%b done=%b older=%b vrd=%b slow=%b post=%b hold1=%b kill=%b",
+        $display("TRACEP %0d v=%b%b%b%b mem2=%0d mem4=%0d adv=%b%b%b%b d2done=%b gnt=%b done=%b older=%b slow=%b hold1=%b kill=%b",
                  profile_cycles, dut.cpu.cpu.dmu.m1.v, dut.cpu.cpu.dmu.m2.r.v, dut.cpu.cpu.dmu.m3.r.v,
                  dut.cpu.cpu.dmu.m4.r.v, dut.cpu.cpu.dmu.m2.r.mem, dut.cpu.cpu.dmu.m4.r.mem,
                  dut.cpu.cpu.dmu.adv_dc1, dut.cpu.cpu.dmu.adv_dc2, dut.cpu.cpu.dmu.adv_ex,
                  dut.cpu.cpu.dmu.adv_wb, dut.cpu.cpu.dmu.e_dc2_done, dut.cpu.cpu.dmu.b_gnt,
-                 dut.cpu.cpu.dmu.b_done, dut.cpu.cpu.dmu.dm_older, dut.cpu.cpu.dmu.dc2_vrd,
-                 dut.cpu.cpu.dmu.dc2_slow, dut.cpu.cpu.dmu.wb_vram_post, dut.cpu.cpu.dmu.dm_hold1,
+                 dut.cpu.cpu.dmu.b_done, dut.cpu.cpu.dmu.dm_older,
+                 dut.cpu.cpu.dmu.dc2_slow, dut.cpu.cpu.dmu.dm_hold1,
                  dut.cpu.cpu.dmu.kill_now);
     end
 end
@@ -300,11 +300,10 @@ task automatic run_profile;
                 // a MOVE16 moves a line: four beats each way
                 integer per;
                 per = k >= 9 ? 4 : 1;
-                // a posted store (AP040_VRAM_POST) from the untimed first
-                // iteration can reach the bus inside the window: one extra
-                // write beat; the run's exact total is checked at the end.
-                // A VRAM read does not wait for older instructions: the read
-                // behind the loop's last DBRA reaches the bus and is discarded
+                // a store from the untimed first iteration can reach the
+                // bus inside the window: one extra write beat; the run's
+                // exact total is checked at the end.  A read behind the
+                // loop's last DBRA can reach the bus and be discarded
                 if ((k == 4 || k == 10 ? profile_beats[3]-first_beats[3] != 0 :
                      (profile_beats[3]-first_beats[3] < 255*per ||
                       profile_beats[3]-first_beats[3] > 256*per)) ||

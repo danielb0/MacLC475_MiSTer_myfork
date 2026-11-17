@@ -95,10 +95,10 @@ ap68040 #(
 	.DUAL(0), .BTIC(0),
 	// only RAM ($0-$3FFFFFFF) and the ROM window ($4xxxxxxx) are cacheable:
 	// everything else is a device, never read speculatively
-	// No posted VRAM stores (PA_VRAM_POST): with them on, the core hung
-	// under load (Speedometer, 100 MB / 32-bit) and they gained no measured
-	// speed.  This also keeps the direct VRAM read and MOVE16 paths off.
-	.PA_IO_SERIAL(1), .PA_VRAM_POST(0),
+	// (the DMU has no posted VRAM stores: the Q800 donor's posting hung the
+	// core under load -- Speedometer, 100 MB / 32-bit -- for no measured
+	// speed, and was removed with its direct VRAM read paths)
+	.PA_IO_SERIAL(1),
 	.PA_C0_MASK(32'hC000_0000), .PA_C0_MATCH(32'h0000_0000),
 	.PA_C1_MASK(32'hF000_0000), .PA_C1_MATCH(32'h4000_0000)
 ) cpu (
