@@ -1730,43 +1730,13 @@ end
 //   [31:0]   {F-line count, illegal count}   (16 bits each, saturating)
 //   [63:32]  PC of the trapping instruction
 //   [95:64]  {vector, format, opword valid, 3'b0, opword}
-//   [127:96] {SR, 13'b0, IPL in} at the last missed interrupt (below)
+//   [127:96]  zero
 //   [159:128] PC of the first instruction to commit after the trap (the
 //             handler's entry)
-//   [191:160] PC of the instruction at the last missed interrupt
-//   [223:192] {interrupts taken (wraps), irq_pend, cm_block, halted,
-//              dbl_fault, STOPped, SR mask, cm_pend, wb_v, ipend_r, cm_n_v,
-//              trace_defer, IPL in} -- live, not frozen at the trap
-//   [255:224] {boundaries with an interrupt pending, of those the ones
-//              where it was not taken} (16 bits each, wrapping)
-// (interrupt-gate diag, 2026-11-16: the A26 hang spins in cache with IPL 4
-// over SR mask 1 and takes no interrupt; these say which term blocks it)
+//   [255:160] zero
 logic [31:0] tr_hpc, tr_pc1, tr_pc2;
 logic [15:0] tr_op1, tr_op2;
 logic        tr_hwait;
-logic [15:0] tr_nirq;
-always_ff @(posedge clk)
-	if (!nreset) tr_nirq <= 0;
-	else if (x_go && take_irq && !(adv_wb && wb_is_exc)) tr_nirq <= tr_nirq + 1'b1;
-// interrupt gate: a boundary where irq_pend holds should take it
-wire        ig_pb   = wb_bound && irq_pend;
-wire        ig_miss = ig_pb && !(x_go && take_irq);
-logic [15:0] ig_npb, ig_nmiss, ig_sr;
-logic [31:0] ig_pc;
-logic  [2:0] ig_ipl;
-always_ff @(posedge clk)
-	if (!nreset) begin
-		ig_npb <= 0; ig_nmiss <= 0; ig_sr <= 0; ig_pc <= 0; ig_ipl <= 0;
-	end
-	else begin
-		if (ig_pb) ig_npb <= ig_npb + 1'b1;
-		if (ig_miss) begin
-			ig_nmiss <= ig_nmiss + 1'b1;
-			ig_pc    <= wb_u.pc;
-			ig_sr    <= {sr_r[15:5], ccr_f};
-			ig_ipl   <= ipl_q;
-		end
-	end
 logic [15:0] tr_ow, tr_ew, tr_nf, tr_ni;
 logic [31:0] tr_owpc, tr_pc;
 logic [15:0] tr_op, tr_xa, tr_cap_ew;
@@ -1811,18 +1781,9 @@ always_ff @(posedge clk) begin
 		end
 	end
 end
-// diag 2026-11-16: PC of the last completed instruction, so a hang can be
-// located by reading this word a few times.  Takes the slot of tr_hpc.
-logic [31:0] live_pc;
-always_ff @(posedge clk)
-	if (!nreset) live_pc <= 0;
-	else if (wb_bound) live_pc <= wb_u.pc;
-assign dbg_trap = {ig_npb, ig_nmiss,
-                   tr_nirq, irq_pend, cm_block, halted, dbl_fault,
-                   stopped, irq_mask, cm_pend, wb_v, ipend_r, cm_n_v,
-                   trace_defer, ipl_q,
-                   ig_pc, live_pc,
-                   ig_sr, 13'd0, ig_ipl,
+assign dbg_trap = {96'd0,
+                   tr_hpc,
+                   32'd0,
                    tr_vec, tr_fmt, tr_owv, 3'b000, tr_op,
                    tr_pc,
                    tr_nf, tr_ni};
