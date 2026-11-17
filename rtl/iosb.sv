@@ -1071,7 +1071,11 @@ always @(posedge clk) begin
 					sdma_watch <= 0;
 					astate     <= A_SDMA;
 				end
-				else if (sel_id) rdata <= (addr == 26'h3FFFFFF) ? 32'hA55A2225 : 32'hA55A2BAD;
+				// $5FFFFFFC is the board ID the ROM keys the model on (MAME
+				// macquadra605.cpp): A55A2225 = Quadra 605, A55A2221 =
+				// LC/Performa 475, A55A222E = LC 575.  VIA1 PA does not
+				// distinguish them.
+				else if (sel_id) rdata <= (addr == 26'h3FFFFFF) ? 32'hA55A2221 : 32'hA55A2BAD;
 				else rdata <= 32'h0;             // inert device space
 			end
 		end
