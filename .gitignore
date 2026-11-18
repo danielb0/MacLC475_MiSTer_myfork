@@ -22,3 +22,5 @@ jtag.cdf
 __pycache__/
 refs/
 AGENTS.md
+CLAUDE.md
+HANDOFF.md
