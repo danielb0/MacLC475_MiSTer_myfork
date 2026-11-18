@@ -82,9 +82,6 @@ wire [15:0] dbg_perf;
 wire [255:0] dbg_trap;          // last F-line / illegal trap (perf words 23-26)
 wire [31:0] c_di;
 wire        c_ta_n, c_tea_n, c_tci_n, c_avec_n;
-// CIOUT is held from the cycle's TS until the next one starts, so it is
-// steady for the whole request the bus adapter presents (perf counters)
-wire        c_ciout_n;
 wire        c_lock_n;
 // the adapter's side of the optional store buffer
 wire        cpu_bus_req, cpu_bus_write, cpu_bus_instr, cpu_bus_ack;
@@ -112,7 +109,7 @@ ap68040 #(
 
 	.a_o(c_a), .a_oe(c_a_oe), .d_o(c_do), .d_oe(),
 	.rw_n(c_rw_n), .siz(c_siz), .tt(c_tt), .tm(c_tm), .tln(), .upa(),
-	.ciout_n(c_ciout_n), .lock_n(c_lock_n), .locke_n(), .ts_n(c_ts_n), .tip_n(),
+	.ciout_n(), .lock_n(c_lock_n), .locke_n(), .ts_n(c_ts_n), .tip_n(),
 	.d_i(c_di), .ta_n(c_ta_n), .tea_n(c_tea_n), .tci_n(c_tci_n), .tbi_n(1'b1),
 	.ipl_n(ipl), .avec_n(c_avec_n), .ipend_n(),
 	// the only master: the bus is granted for good
@@ -174,7 +171,7 @@ perf_counters perf (
 	.clk(clk), .clear(perf_clear), .freeze(perf_freeze), .page(perf_page),
 	.retire(dbg_pev[56]), .retire2(dbg_pev[57]), .core(dbg_perf),
 	.c_req(cpu_bus_req), .c_ack(cpu_bus_ack), .c_write(cpu_bus_write),
-	.c_instr(cpu_bus_instr), .c_ci(!c_ciout_n), .c_addr(cpu_bus_addr),
+	.c_instr(cpu_bus_instr), .c_line(c_siz == 2'b11), .c_addr(cpu_bus_addr),
 	.m_req(bus_req), .m_ack(bus_ack), .vram_ev(perf_vram_ev),
 	.trap(dbg_trap),
 	.row1(perf_rows[223:160]), .row2(perf_rows[159:128]),

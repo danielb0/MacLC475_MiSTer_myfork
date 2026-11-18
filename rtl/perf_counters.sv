@@ -25,7 +25,7 @@
 //         and reads through the engine's general path; VRAM read-wait
 //         cycles under a DMA burst; general-path reads that are split
 // Page 6: table walks started; CPU frame buffer stores posted and
-//         stores through the general path; PFLUSHes (any scope);
+//         stores through the general path; CINVA/CPUSHA with the DC;
 //         CINV/CPUSHes reaching the instruction cache; lines pushed by
 //         CPUSH (the four MMU/cache counts replaced VRAM controller ones
 //         on 2026-11-13: fill-beat waits, prefetches issued and used,
@@ -36,10 +36,13 @@
 // differently in slots 32, 33, 35, 37, 38 and 41.
 //
 // Slots 32 and 37 (frame buffer reads sent straight to the bus, stores
-// posted) read 0 since the DMU lost those paths.  They now count RAM data
-// beats the CPU marked cache-inhibited (CIOUT asserted): slot 32 reads,
-// slot 37 writes.  RAM data reads that are neither these nor line-fill
-// beats point at something else keeping RAM out of the data cache.
+// posted) read 0 since the DMU lost those paths.  They now split RAM data
+// reads by size: slot 32 counts line (SIZ = 11) read beats, slot 37 the
+// request cycles of those line reads.  Against b_ram_rd and r_ram_rd that
+// gives fills vs single reads and the cycles per beat of each.  (A
+// 2026-11-17 capture counting CIOUT here found no cache-inhibited RAM data
+// beats at all.)  Slot 39 (was PFLUSH, which the Mac OS never issues)
+// counts CINV/CPUSH of the whole data cache (CINVA/CPUSHA DC or BC).
 //
 // rd_idx/rd_data read any one counter by number (0-41, page * 6 + slot) for
 // the DDR3 snapshot (MacLC475.sv perf_ddr_*): no clear or freeze needed,
@@ -59,7 +62,7 @@ module perf_counters (
 	input      [15:0] core,        // ap68040 dbg_perf
 
 	input             c_req, c_ack, c_write, c_instr,
-	input             c_ci,            // the cycle's CIOUT (cache-inhibited)
+	input             c_line,          // a line transfer (SIZ = 11)
 	input      [31:0] c_addr,
 	input             m_req, m_ack,
 	input      [11:0] vram_ev,         // vram_ddr3 event strobes, pages 5-6
@@ -82,8 +85,8 @@ wire ram  = c_addr[31:30] == 2'b00;
 wire vram = c_addr[31:21] == 11'b1111_1001_000;
 wire io   = !rom && !ram && !vram;
 wire beat = c_req && c_ack;
-wire ram_rd_ci = beat && ram && !c_instr && !c_write && c_ci;   // slot 32
-wire ram_wr_ci = beat && ram && !c_instr &&  c_write && c_ci;   // slot 37
+wire ram_rd_line  = beat  && ram && !c_instr && !c_write && c_line;  // slot 32
+wire ram_rd_linec = c_req && ram && !c_instr && !c_write && c_line;  // slot 37
 
 // one request-cycle event per category; beats are the same and c_ack
 wire [5:0] cat = {
@@ -97,8 +100,8 @@ wire [5:0] cat = {
 
 wire [N-1:0] ev = {
 	// pages 5 and 6: vram_ddr3's events, six replaced by the core's
-	core[15:13], core[10], ram_wr_ci, core[12],
-	core[8], vram_ev[4], core[7], ram_rd_ci, vram_ev[1:0],
+	core[15:13], core[10], ram_rd_linec, core[12],
+	core[8], vram_ev[4], core[7], ram_rd_line, vram_ev[1:0],
 	// page 4
 	m_req && !m_ack, m_req,
 	c_req && vram && c_write, beat && vram && c_write,

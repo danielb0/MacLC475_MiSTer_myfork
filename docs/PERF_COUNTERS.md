@@ -30,8 +30,8 @@ Four rows of hex. Rows 1, 3 and 4 hold two counters each (left, right); row 2 is
 | 2 (beats) | ROM ifetch, RAM ifetch | ROM data read, RAM data read | RAM data write, I/O |
 | 3 (request cycles) | ROM ifetch, RAM ifetch | ROM data read, RAM data read | RAM data write, I/O |
 | 4 | VRAM read beats, VRAM read cycles | VRAM write beats, VRAM write cycles | machine-side request cycles, machine-side cycles without ack |
-| 5 (VRAM controller, RAM) | read hits in the line cache, line fills issued | cache-inhibited RAM data read beats (`ram_rd_ci`), frame buffer reads through the general path (`vrd_gen`) | read-wait clocks behind a scanline DMA burst, split general-path reads (`vrd_gen_split`) |
-| 6 (MMU, caches, VRAM stores) | table walks started (`walks`), cache-inhibited RAM data write beats (`ram_wr_ci`) | stores through the general path (`vst_slow`), PFLUSHes of any scope (`pflush`) | CINV/CPUSHes reaching the instruction cache (`ic_inv`), lines pushed by CPUSH (`cpush_lines`) |
+| 5 (VRAM controller, RAM) | read hits in the line cache, line fills issued | RAM data line (SIZ = 11) read beats (`ram_rd_line`), frame buffer reads through the general path (`vrd_gen`) | read-wait clocks behind a scanline DMA burst, split general-path reads (`vrd_gen_split`) |
+| 6 (MMU, caches, VRAM stores) | table walks started (`walks`), request cycles of RAM data line reads (`ram_rd_linec`) | stores through the general path (`vst_slow`), CINVA/CPUSHA that include the data cache (`dc_flush_all`; was PFLUSH, which the Mac OS never issues) | CINV/CPUSHes reaching the instruction cache (`ic_inv`), lines pushed by CPUSH (`cpush_lines`) |
 
 - Pages 2-4 (except the machine-side pair) watch the CPU's own bus, before the store buffer: a request cycle there is a cycle the bus unit waits on that kind of access. A beat is one acked longword; a line fill is four beats, so ifetch beats / 4 = I-cache misses.
 - Engine idle cycles = cycles minus page 1 and page 0's last counter.
