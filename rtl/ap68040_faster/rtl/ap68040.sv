@@ -25,6 +25,7 @@ module ap68040
 	parameter int         DIV_STEPS    = 2,      // divide steps per cycle (2 or 4)
 	parameter bit         DUAL         = 1,      // dual issue: the second slot (ap68040_pkg s1_t)
 	parameter bit         BTIC         = 1,      // the fetch BTB's target words
+	parameter bit         DM_EARLY_TA  = 1,      // the DMU takes TA in its own clock (biu done_e)
 	// DUAL: the second slot's classes {load, An, Dn}.  Loads are off: on the
 	// Minimig (2026-10-23) a second-slot MOVE (Ay),Dx returned wrong data
 	// now and then -- the hard-disk boot read garbage, and PFS3 wrote it
@@ -36,9 +37,6 @@ module ap68040
 	parameter bit         S1_LDTK      = 1,      // ... a load companion at a BTB-taken target (a debug switch)
 	// platform cacheability (ap68040_dmu): 0 = as upstream
 	parameter bit          PA_IO_SERIAL = 0,
-	// Quadra's on-chip, non-faulting VRAM: retire an ordinary store once
-	// captured by the DMU bus engine. Other hosts retain normal bus timing.
-	parameter bit          PA_VRAM_POST = 0,
 	parameter logic [31:0] PA_C0_MASK = 32'h0, PA_C0_MATCH = 32'h0,
 	parameter logic [31:0] PA_C1_MASK = 32'h0, PA_C1_MATCH = 32'h0
 )(
@@ -107,8 +105,12 @@ module ap68040
 	output logic  [63:0] dbg_pev,
 	// observation only, levels for perf counters: [2:0] the data engine's
 	// state class, [3] DC2 held, [4] WB held (ap68040_dmu), [5] the
-	// decoder's queue is empty
-	output logic   [5:0] dbg_perf
+	// decoder's queue is empty; [11:6] the DMU's frame buffer access
+	// strobes (its dbg_perf[10:5]); [15:12] its MMU and cache strobes
+	// (its dbg_perf[14:11])
+	output logic  [15:0] dbg_perf,
+	// observation only: the last F-line / illegal trap (ap68040_backend)
+	output logic [255:0] dbg_trap
 );
 
 // the dual-issue events behind dbg_pev
@@ -193,6 +195,19 @@ logic [31:0]   b_rdata;
 logic  [1:0]   b_rbeat;
 logic          b_ravec, b_rtci;
 logic  [1:0]   b_errbeat;
+logic [NC-1:0] e_done;           // BIU same-clock terminations
+logic          e_rvalid, e_rclient, e_ravec, e_rtci;
+logic [31:0]   e_rdata;
+logic  [1:0]   e_rbeat;
+// the data unit's view: TA's own clock (DM_EARLY_TA), or the registered
+// pulses a clock later (upstream)
+wire           dm_bdone  = DM_EARLY_TA ? e_done[0] : b_done[0];
+wire           dm_rvalid = DM_EARLY_TA ? (e_rvalid && e_rclient == 1'b0)
+                                       : (b_rvalid && b_rclient == 1'b0);
+wire  [31:0]   dm_rdata  = DM_EARLY_TA ? e_rdata : b_rdata;
+wire   [1:0]   dm_rbeat  = DM_EARLY_TA ? e_rbeat : b_rbeat;
+wire           dm_ravec  = DM_EARLY_TA ? e_ravec : b_ravec;
+wire           dm_rtci   = DM_EARLY_TA ? e_rtci  : b_rtci;
 logic          b_idle;
 logic          rsto_req, rsto_busy;
 logic          be_fstop;
@@ -205,6 +220,8 @@ ap68040_biu #(.NC(NC)) biu (
 	.gnt(b_gnt), .done(b_done), .err(b_err),
 	.rvalid(b_rvalid), .rclient(b_rclient), .rdata(b_rdata), .rbeat(b_rbeat),
 	.ravec(b_ravec), .rtci(b_rtci), .errbeat(b_errbeat), .idle(b_idle), .own(b_own),
+	.done_e(e_done), .rvalid_e(e_rvalid), .rclient_e(e_rclient), .rdata_e(e_rdata),
+	.rbeat_e(e_rbeat), .ravec_e(e_ravec), .rtci_e(e_rtci),
 	.unlock(lk_abandon), .halt(dbg_halted), .more({1'b0, 1'b0}), .drop({1'b0, b_drop}),
 	.rsto_req(rsto_req), .rsto_busy(rsto_busy),
 	.a_o(a_o), .a_oe(a_oe), .d_i(d_i), .d_o(b_d_o), .d_oe(b_d_oe),
@@ -313,11 +330,11 @@ ap68040_backend #(.HAS_FPU(HAS_FPU), .FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_
 	.ipl(ipl_v), .dbcc_floor(dbcc_floor), .iack_lvl(iack_lvl), .rsto_req(rsto_req), .rsto_busy(rsto_busy),
 	.kill_now(kill_now), .lk_abandon(lk_abandon), .adv_ag(adv_ag),
 	.dtt0(dtt0), .dtt1(dtt1), .itt0(itt0), .itt1(itt1), .tc(tc),
-	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_retire2(dbg_retire2), .halted(dbg_halted), .fetch_stop(be_fstop)
+	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_retire2(dbg_retire2), .halted(dbg_halted), .dbg_trap(dbg_trap), .fetch_stop(be_fstop)
 );
 
-logic  [4:0] dm_perf;
-ap68040_dmu #(.DC1_ATC(DC1_ATC), .PA_IO_SERIAL(PA_IO_SERIAL), .PA_VRAM_POST(PA_VRAM_POST),
+logic [14:0] dm_perf;
+ap68040_dmu #(.DC1_ATC(DC1_ATC), .PA_IO_SERIAL(PA_IO_SERIAL),
 	.PA_C0_MASK(PA_C0_MASK), .PA_C0_MATCH(PA_C0_MATCH),
 	.PA_C1_MASK(PA_C1_MASK), .PA_C1_MATCH(PA_C1_MATCH)) dmu (
 	.clk(clk), .nreset(nreset),
@@ -347,9 +364,9 @@ ap68040_dmu #(.DC1_ATC(DC1_ATC), .PA_IO_SERIAL(PA_IO_SERIAL), .PA_VRAM_POST(PA_V
 	.iatc_flush_fc2(iatc_flush_fc2), .iatc_wr(iatc_wr), .iatc_wla(iatc_wla),
 	.iatc_wfc2(iatc_wfc2), .iatc_went(iatc_went),
 	.b_req(b_req[0]), .b_breq(b_breq[0]), .b_wdata(b_wdata[0]),
-	.b_gnt(b_gnt[0]), .b_done(b_done[0]), .b_err(b_err[0]), .b_drop(b_drop),
-	.b_rvalid(b_rvalid && b_rclient == 1'b0), .b_rdata(b_rdata), .b_rbeat(b_rbeat),
-	.b_ravec(b_ravec), .b_rtci(b_rtci),
+	.b_gnt(b_gnt[0]), .b_done(dm_bdone), .b_err(b_err[0]), .b_drop(b_drop),
+	.b_rvalid(dm_rvalid), .b_rdata(dm_rdata), .b_rbeat(dm_rbeat),
+	.b_ravec(dm_ravec), .b_rtci(dm_rtci),
 	.sn_req(sn_req), .sn_pa(sn_pa), .sn_look(sn_look), .sn_hit(sn_hit),
 	.sn_dirty(sn_dirty), .sn_line(sn_line), .sn_inv(sn_inv), .sn_wr(sn_wr),
 	.sn_wbe(sn_wbe), .sn_wword(sn_wword)
@@ -461,7 +478,7 @@ logic   [9:0] dbg_d;
 // retires an instruction, and a second-slot one
 assign dbg_pev = {6'd0, dbg_retire2, dbg_retire, dbg_pu[19:16], dbg_pd[35:32],
                   dbg_pu[15:0], dbg_pd[31:0]};
-assign dbg_perf = {qcnt == 4'd0, dm_perf};
+assign dbg_perf = {dm_perf[14:5], qcnt == 4'd0, dm_perf[4:0]};
 assign dbg_fe = {dbg_d, 10'd0, consume, qcnt, d_redir_v, redir_v, btb_we, btb_wkind, btb_wslot, btb_wtgt,
                  d_redir_pc, redir_pc, qpc, dbg_pc, dbg_f};
 

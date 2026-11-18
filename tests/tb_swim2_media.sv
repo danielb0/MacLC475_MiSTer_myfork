@@ -110,7 +110,7 @@ task finish_sector;
     end
 endtask
 
-task drain_sector;
+task commit_sector;
     reg [21:0] held_addr;
     reg [15:0] held_data;
     begin
@@ -138,10 +138,18 @@ task drain_sector;
             wr_ack = 0; cycle;
         end
         while (!save_valid) cycle;
-        check(save_addr, expected_base); check(buffer_owned, 1);
+        // The sector is in image RAM and the persistence snapshot; the host
+        // save no longer owns the decoder buffer.
+        check(save_addr, expected_base); check(buffer_owned, 0);
+    end
+endtask
+
+task drain_sector;
+    begin
+        commit_sector;
         repeat (4) begin
             cycle; check(save_valid, 1); check(save_addr, expected_base);
-            check(buffer_owned, 1); check(stream_enable, 0); check(flush_req, 0);
+            check(buffer_owned, 0); check(flush_req, 0); check(wr_req, 0);
         end
         save_ready = 1; cycle; save_ready = 0;
         check(save_valid, 0); check(buffer_owned, 0);
@@ -244,6 +252,31 @@ initial begin
     check(write_fault, 1);
     drain_sector; check(notifications, 2);
     check(stream_enable, 0);
+    write_active = 0; cycle; write_active = 1; cycle;
+    check(stream_enable, 1); check(write_fault, 0);
+
+    // Regression for MacTest Pro "Could not write fast enough" (-74): the
+    // host's write and fsync of one sector take milliseconds, longer than the
+    // gap before the next physical sector. That save must not stall the guest.
+    payload_seed = 8'h3c; expected_seed = payload_seed; anchor_sector = 1;
+    begin_sector; payload; finish_sector;
+    commit_sector;
+    check(save_valid, 1); check(read_enable, 1);
+    // The driver ends ACTION, finds the next header, then writes again.
+    write_active = 0; cycle; write_active = 1; cycle;
+    check(stream_enable, 1);
+    write_tick = 1; cycle; write_tick = 0; check(write_fault, 0);
+    payload_seed = 8'h96; anchor_sector = 2;
+    begin_sector; payload; finish_sector;
+    check(write_fault, 0);
+    // The second commit would refill the snapshot, so it waits for the save.
+    repeat (20) begin
+        cycle; check(wr_req, 0); check(save_valid, 1); check(save_addr, expected_base);
+        check(buffer_owned, 1); check(read_enable, 0);
+    end
+    save_ready = 1; cycle; save_ready = 0; check(notifications, 3);
+    expected_base = expected_base + 512; expected_seed = payload_seed;
+    drain_sector; check(notifications, 4);
     write_active = 0; cycle; write_active = 1; cycle;
     check(stream_enable, 1); check(write_fault, 0);
 

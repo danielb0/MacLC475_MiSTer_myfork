@@ -1,24 +1,14 @@
 // Staged pipelined CPU adapter. Machine qualification is pending.
 
-module quadra_cpu040
+module cpu040
 #(
 	parameter AP040_HAS_FPU = 0,
 	// Lean Q800 donor: a two-entry posted-write queue below the caches for
 	// RAM and VRAM-window stores (wombat_store_buffer). 0 restores direct writes.
 `ifdef AP040_STORE_BUFFER_OFF
-	parameter AP040_STORE_BUFFER = 0,
+	parameter AP040_STORE_BUFFER = 0
 `else
-	parameter AP040_STORE_BUFFER = 1,
-`endif
-	// The DMU retires a plain store to the VRAM window ($F900-$F91F) at WB
-	// and frees its bus engine at the grant, instead of waiting for the
-	// bus to finish (Quadra 800's AP040_VRAM_POST).  Safe while a VRAM
-	// write never faults: vram_ddr3 queues it, and a full queue only holds
-	// the grant.  0 restores the precise path.
-`ifdef AP040_VRAM_POST_OFF
-	parameter AP040_VRAM_POST = 0
-`else
-	parameter AP040_VRAM_POST = 1
+	parameter AP040_STORE_BUFFER = 1
 `endif
 )
 (
@@ -75,7 +65,9 @@ module quadra_cpu040
 	input         perf_freeze,
 	input   [2:0] perf_page,
 	input  [11:0] perf_vram_ev,
-	output [223:0] perf_rows
+	output [223:0] perf_rows,
+	input   [5:0] perf_rd_idx,
+	output [31:0] perf_rd_data
 );
 
 wire [31:0] c_a, c_do;
@@ -86,7 +78,8 @@ wire [31:0] dbg_pc;
 wire        dbg_halted;
 wire        dbg_retire;
 wire [63:0] dbg_pev;
-wire  [5:0] dbg_perf;
+wire [15:0] dbg_perf;
+wire [255:0] dbg_trap;          // last F-line / illegal trap (perf words 23-26)
 wire [31:0] c_di;
 wire        c_ta_n, c_tea_n, c_tci_n, c_avec_n;
 wire        c_lock_n;
@@ -102,7 +95,10 @@ ap68040 #(
 	.DUAL(0), .BTIC(0),
 	// only RAM ($0-$3FFFFFFF) and the ROM window ($4xxxxxxx) are cacheable:
 	// everything else is a device, never read speculatively
-	.PA_IO_SERIAL(1), .PA_VRAM_POST(AP040_VRAM_POST),
+	// (the DMU has no posted VRAM stores: the Q800 donor's posting hung the
+	// core under load -- Speedometer, 100 MB / 32-bit -- for no measured
+	// speed, and was removed with its direct VRAM read paths)
+	.PA_IO_SERIAL(1),
 	.PA_C0_MASK(32'hC000_0000), .PA_C0_MATCH(32'h0000_0000),
 	.PA_C1_MASK(32'hF000_0000), .PA_C1_MATCH(32'h4000_0000)
 ) cpu (
@@ -123,10 +119,10 @@ ap68040 #(
 	.mi_n(c_mi_n), .ta_n_o(), .ta_oe(),
 	.rsto_n(c_rsto_n), .cdis_n(1'b1), .mdis_n(1'b1), .pst(),
 	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_halted(dbg_halted),
-	.dbg_pev(dbg_pev), .dbg_perf(dbg_perf)
+	.dbg_pev(dbg_pev), .dbg_perf(dbg_perf), .dbg_trap(dbg_trap)
 );
 
-quadra_bus040 bus_adapter (
+bus040 bus_adapter (
     .clk(clk), .nreset(nreset), .stall_hold(stall_hold),
     .c_a(c_a), .c_do(c_do), .c_a_oe(c_a_oe), .c_rw_n(c_rw_n),
     .c_ts_n(c_ts_n), .c_siz(c_siz), .c_tt(c_tt), .c_tm(c_tm),
@@ -175,10 +171,12 @@ perf_counters perf (
 	.clk(clk), .clear(perf_clear), .freeze(perf_freeze), .page(perf_page),
 	.retire(dbg_pev[56]), .retire2(dbg_pev[57]), .core(dbg_perf),
 	.c_req(cpu_bus_req), .c_ack(cpu_bus_ack), .c_write(cpu_bus_write),
-	.c_instr(cpu_bus_instr), .c_addr(cpu_bus_addr),
+	.c_instr(cpu_bus_instr), .c_line(c_siz == 2'b11), .c_addr(cpu_bus_addr),
 	.m_req(bus_req), .m_ack(bus_ack), .vram_ev(perf_vram_ev),
+	.trap(dbg_trap),
 	.row1(perf_rows[223:160]), .row2(perf_rows[159:128]),
-	.row3(perf_rows[127:64]), .row4(perf_rows[63:0])
+	.row3(perf_rows[127:64]), .row4(perf_rows[63:0]),
+	.rd_idx(perf_rd_idx), .rd_data(perf_rd_data)
 );
 
 assign walker_req     = 1'b0;

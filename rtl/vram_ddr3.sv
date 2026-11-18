@@ -16,7 +16,7 @@ module vram_ddr3 #(
 	input             reset,           // synchronous reset on clk_sys
 
 	//---------------------------------------------------------
-	// CPU / quadra800 bus interface (clk_sys)
+	// CPU / lc475 bus interface (clk_sys)
 	//---------------------------------------------------------
 	input             mem_req,
 	input             mem_is_vram,
@@ -385,9 +385,36 @@ wire fifo_conflict = line_conflict;
 // wr_now_be covers a write landing on the very clock of its beat.
 reg  [31:0] fill_wr_mask = 32'd0;
 wire        fill_active  = (state == S_CPU_READ) || (state == S_CPU_DATA);
-wire [14:0] fill_tag     = (rd_victim == 2'd0) ? rd_cache_tag_0 :
-                           (rd_victim == 2'd1) ? rd_cache_tag_1 :
-                           (rd_victim == 2'd2) ? rd_cache_tag_2 : rd_cache_tag_3;
+// the line being filled: rd_victim's tag, kept in its own register so the
+// read acknowledge below compares against a flop instead of a 4-way mux
+reg  [14:0] fill_tag     = 15'd0;
+// a pending read takes a fill beat only from its own line: with the
+// next-line prefetch, the line in flight is often not the one the CPU is
+// waiting for
+wire        fill_mine    = (cur_rd_tag == fill_tag);
+
+// Next-line prefetch.  89 % of fills in the Graphics test were for the line
+// after the last one filled (capture of 2026-11-12): QuickDraw walks a row
+// of VRAM 32 bytes at a time.  Every VRAM read of line N asks for line N+1
+// (pf_want, pf_tag), and when the bus is free and no demand read waits,
+// N+1 is fetched into the next way like a demand fill.  It is skipped when
+// a way already holds that tag, or the write FIFO holds a write for it
+// (same rule as a demand fill: the fill must not predate a queued write).
+localparam PREFETCH = 1'b1;
+reg         pf_want = 1'b0;
+reg  [14:0] pf_tag  = 15'd0;
+wire        pf_held = (pf_tag == rd_cache_tag_0) ||
+                      (pf_tag == rd_cache_tag_1) ||
+                      (pf_tag == rd_cache_tag_2) ||
+                      (pf_tag == rd_cache_tag_3);
+reg pf_conflict;
+integer p_i;
+always @(*) begin
+	pf_conflict = 1'b0;
+	for (p_i = 0; p_i < FIFO_DEPTH; p_i = p_i + 1)
+		if (slot_used(p_i[3:0]) && (fifo_addr[p_i][16:2] == pf_tag))
+			pf_conflict = 1'b1;
+end
 wire [7:0] wr_now_be  = cpu_vram_write ? cpu_w64_be : 8'h00;
 wire [7:0] fill_val_0 = ~((cur_rd_beat == 2'd0) ? wr_now_be : 8'h00) & ~fill_wr_mask[7:0];
 wire [7:0] fill_val_b = ~((cur_rd_beat == rd_burst_beat) ? wr_now_be : 8'h00) & ~fill_wr_mask[{rd_burst_beat, 3'b000} +: 8];
@@ -408,8 +435,12 @@ wire [31:0] hit_word = mem_addr[2] ? hit_data[63:32] : hit_data[31:0];
 // The fast port: the same lookup on the CPU's bus address, combinational,
 // so the machine can register its acknowledge in the clock the request
 // appears.  The rules are those of a hit above; a read that misses here
-// comes back as mem_req.  Not on a write's clock: the write is older than
-// the read in bus order and lands in the line at the clock edge.
+// comes back as mem_req.  Not on the clock of a write to the same longword:
+// the write is older than the read in bus order and lands in the line at
+// the clock edge.  A write to any other longword leaves this one's bytes
+// and their valid bits alone, so the read is answered beside it (the
+// machine acknowledges a queued write and takes the next read in
+// consecutive clocks).
 wire [14:0] fast_tag  = fast_addr[19:5];
 wire  [1:0] fast_beat = fast_addr[4:3];
 wire  [4:0] fast_half = {fast_beat, fast_addr[2], 2'b00};
@@ -424,7 +455,7 @@ wire [63:0] fast_beat_data = fast_way_0 ? rd_cache_line_0[fast_beat] :
                              fast_way_2 ? rd_cache_line_2[fast_beat] :
                                           rd_cache_line_3[fast_beat];
 assign fast_hit  = (fast_way_0 || fast_way_1 || fast_way_2 || fast_way_3) &&
-                   !cpu_vram_write;
+                   !(cpu_vram_write && (mem_addr[19:2] == fast_addr[19:2]));
 assign fast_data = fast_addr[2] ? fast_beat_data[63:32] : fast_beat_data[31:0];
 
 // DDR3 Request & Arbitration FSM States
@@ -485,6 +516,23 @@ always @(posedge clk_sys) begin
 	end
 end
 
+// Prefetch accounting (perf events 9 and 10).  pf_mark[w]: way w was filled
+// by a prefetch and no read has used it yet.  The first read answered from
+// such a way, by a hit on either port or by one of its fill beats, counts
+// as a used prefetch and clears the mark.
+reg   [3:0] pf_mark = 4'd0;
+wire        pe_rd_hit   = mem_req && mem_is_vram && !mem_write && !vram_ack &&
+                          rd_cache_hit;
+wire  [3:0] pe_hit_ways = pe_rd_hit ? {hit_way_3, hit_way_2, hit_way_1, hit_way_0} :
+                          fast_take ? {fast_way_3, fast_way_2, fast_way_1, fast_way_0} :
+                                      4'd0;
+wire        pe_fill_ack = !reset && cpu_rd_pend && fill_mine && vram_ddr_rvalid &&
+                          (((state == S_CPU_READ) && vram_ddr_ack &&
+                            (cur_rd_beat == 2'd0)) ||
+                           ((state == S_CPU_DATA) && (cur_rd_beat == rd_burst_beat)));
+wire  [3:0] pe_pf_ways  = pf_mark & (pe_hit_ways |
+                          (pe_fill_ack ? (4'd1 << rd_victim) : 4'd0));
+
 //----------------------------------------------------------------------------
 // DDR3 Request & Arbitration FSM
 // Priority:
@@ -515,9 +563,26 @@ always @(posedge clk_sys) begin
 		fill_wr_mask    <= 32'd0;
 		line_req_held   <= 1'b0;
 		dma_wait        <= 8'd0;
+		pf_want         <= 1'b0;
+		pf_mark         <= 4'd0;
 	end
 	else begin
-		// Normal write handshake with quadra800 bus
+		// prefetch bookkeeping: a VRAM read of line N asks for N+1 (the
+		// fill branches below may clear the request or set a mark; theirs
+		// win, being later in this block)
+		if (fast_take) begin
+			pf_want <= 1'b1;
+			pf_tag  <= fast_tag + 15'd1;
+		end
+		else if (mem_req && mem_is_vram && !mem_write) begin
+			pf_want <= 1'b1;
+			pf_tag  <= cur_rd_tag + 15'd1;
+		end
+		else if (pf_want && pf_held && (state == S_IDLE))
+			pf_want <= 1'b0;
+		pf_mark <= pf_mark & ~pe_pf_ways;
+
+		// Normal write handshake with lc475 bus
 		if (mem_req && mem_is_vram && mem_write) begin
 			vram_wr_ph <= !vram_wr_ph;
 			if (vram_wr_ph) vram_ack <= 1'b1;
@@ -633,6 +698,8 @@ always @(posedge clk_sys) begin
 				2'd2: begin rd_cache_tag_2 <= cur_rd_tag; rd_cache_val_2 <= 32'd0; end
 				2'd3: begin rd_cache_tag_3 <= cur_rd_tag; rd_cache_val_3 <= 32'd0; end
 				endcase
+				fill_tag          <= cur_rd_tag;
+				pf_mark[rd_victim] <= 1'b0;
 				fill_wr_mask      <= 32'd0;
 				rd_burst_beat     <= 2'd0;
 				state             <= S_CPU_READ;
@@ -645,6 +712,29 @@ always @(posedge clk_sys) begin
 				vram_ddr_burstcnt <= {4'd0, burst_beats};
 				drain_beats_rem   <= burst_beats;
 				state             <= S_CPU_WRITE;
+			end
+			// 2b. Next-line prefetch: a fill like branch 1's, for pf_tag.
+			// Not with a read pending (branch 1 or 2 owns that clock), not
+			// on a write's clock (that write is not in the FIFO yet), and
+			// not for a line a way already holds.
+			else if (PREFETCH && pf_want && !cpu_rd_pend && !cpu_vram_write &&
+			         !pf_held && !pf_conflict) begin
+				vram_ddr_req      <= 1'b1;
+				vram_ddr_we       <= 1'b0;
+				vram_ddr_addr     <= DDR_VRAM_BASE + {12'd0, pf_tag, 2'b00};
+				vram_ddr_burstcnt <= 8'd4;
+				case (rd_victim)
+				2'd0: begin rd_cache_tag_0 <= pf_tag; rd_cache_val_0 <= 32'd0; end
+				2'd1: begin rd_cache_tag_1 <= pf_tag; rd_cache_val_1 <= 32'd0; end
+				2'd2: begin rd_cache_tag_2 <= pf_tag; rd_cache_val_2 <= 32'd0; end
+				2'd3: begin rd_cache_tag_3 <= pf_tag; rd_cache_val_3 <= 32'd0; end
+				endcase
+				fill_tag          <= pf_tag;
+				pf_mark[rd_victim] <= 1'b1;
+				fill_wr_mask      <= 32'd0;
+				rd_burst_beat     <= 2'd0;
+				pf_want           <= 1'b0;
+				state             <= S_CPU_READ;
 			end
 			// 3. Line DMA burst read (32-beat bursts)
 			else if ((dma_state == DMA_BURST_REQ) && !dma_take) begin
@@ -677,7 +767,7 @@ always @(posedge clk_sys) begin
 					2'd3: begin rd_cache_line_3[2'd0] <= vram_ddr_dout; rd_cache_val_3[7:0] <= fill_val_0; end
 					endcase
 					rd_burst_beat <= 2'd1;
-					if (cpu_rd_pend && (cur_rd_beat == 2'd0)) begin
+					if (cpu_rd_pend && fill_mine && (cur_rd_beat == 2'd0)) begin
 						vram_rdata  <= mem_addr[2] ? vram_ddr_dout[63:32] : vram_ddr_dout[31:0];
 						vram_ack    <= 1'b1;
 						cpu_rd_pend <= 1'b0;
@@ -699,7 +789,7 @@ always @(posedge clk_sys) begin
 				2'd3: begin rd_cache_line_3[rd_burst_beat] <= vram_ddr_dout; rd_cache_val_3[{rd_burst_beat, 3'b000} +: 8] <= fill_val_b; end
 				endcase
 				rd_burst_beat <= rd_burst_beat + 1'b1;
-				if (cpu_rd_pend && (cur_rd_beat == rd_burst_beat)) begin
+				if (cpu_rd_pend && fill_mine && (cur_rd_beat == rd_burst_beat)) begin
 					vram_rdata  <= mem_addr[2] ? vram_ddr_dout[63:32] : vram_ddr_dout[31:0];
 					vram_ack    <= 1'b1;
 					cpu_rd_pend <= 1'b0;
@@ -764,15 +854,12 @@ wire pe_hit  = (mem_req && mem_is_vram && !mem_write && !vram_ack &&
 wire pe_fill = !reset && (state == S_IDLE) &&
                !(dma_late && (dma_state == DMA_BURST_REQ) && !dma_take) &&
                cpu_rd_pend && !fifo_conflict && !cpu_vram_write;
-// a pending read acked by a fill beat (S_CPU_READ / S_CPU_DATA)
-wire pe_fill_ack = !reset && cpu_rd_pend && vram_ddr_rvalid &&
-                   (((state == S_CPU_READ) && vram_ddr_ack &&
-                     (cur_rd_beat == 2'd0)) ||
-                    ((state == S_CPU_DATA) && (cur_rd_beat == rd_burst_beat)));
-wire pe_tag_held = (cur_rd_tag == rd_cache_tag_0) ||
-                   (cur_rd_tag == rd_cache_tag_1) ||
-                   (cur_rd_tag == rd_cache_tag_2) ||
-                   (cur_rd_tag == rd_cache_tag_3);
+// a next-line prefetch issued (S_IDLE branch 2b; pe_fill_ack and
+// pe_pf_ways are declared above the FSM, which uses them)
+wire pe_pf_issue = !reset && (state == S_IDLE) && PREFETCH &&
+                   !(dma_late && (dma_state == DMA_BURST_REQ) && !dma_take) &&
+                   !cpu_rd_pend && !(fifo_count >= 5'd8) && !cpu_vram_write &&
+                   pf_want && !pf_held && !pf_conflict;
 reg [14:0] pe_last_tag = 15'd0;
 always @(posedge clk_sys) if (pe_fill) pe_last_tag <= cur_rd_tag;
 
@@ -780,10 +867,10 @@ assign perf_ev = {
 	// page 6
 	// 11: waits under another line's fill tail
 	cpu_rd_pend && (state == S_CPU_DATA) && (cur_rd_tag != fill_tag),
-	// 10: read acked with ANOTHER line's beat (bug if > 0)
-	pe_fill_ack && (cur_rd_tag != fill_tag),
-	// 9: refill of a line whose tag is held
-	pe_fill && pe_tag_held,
+	// 10: prefetched lines used (first read answered from one)
+	|pe_pf_ways,
+	// 9: next-line prefetches issued
+	pe_pf_issue,
 	// 8: fill of the line after the last one filled
 	pe_fill && (cur_rd_tag == pe_last_tag + 15'd1),
 	// 7: wait: FIFO holds a write for the line

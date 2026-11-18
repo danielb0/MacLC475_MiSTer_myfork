@@ -1,8 +1,18 @@
 # Perf counters (debug builds)
 
-`rtl/perf_counters.sv` keeps 42 free-running 32-bit counters at the 25 MHz machine clock (wrap after about 171 s). They need a `MACLC475_DEBUG` build and are read through the DAFB hex overlay. The sim profile (`tests/run_cpu040.sh profile`) cross-checks them against its own bus counts and prints all seven pages.
+`rtl/perf_counters.sv` keeps 42 free-running 32-bit counters at the 25 MHz machine clock (wrap after about 171 s). They need a `MACLC475_DEBUG` build. The core copies all 42 to DDR3 every 10.5 ms, where an SSH script reads them; the DAFB hex overlay shows them on screen too. The sim profile (`tests/run_cpu040.sh profile`) cross-checks them against its own bus counts and prints all seven pages.
 
-## Taking a measurement
+## Taking a measurement (SSH, no OSD)
+
+Every 2^18 clocks the core writes a snapshot of all counters to DDR3 at ARM physical `0x27F00000` (layout in `MacLC475.sv`, `DDR_PERF_BASE`). Nothing has to be cleared, frozen or paged.
+
+1. Start the logger from a Windows PowerShell terminal: `.\scripts\perflog.ps1` (`-Seconds N` for a timed run, `-Name label`, `-MiSTer mister-living`). It samples once a second into `local/shots/perf/capture_*.csv`; Ctrl-C stops it and it prints and saves the report. From a POSIX shell with the Windows ssh config: `ssh mister-bedroom python3 -u - < scripts/perflog.py > capture.csv` (in WSL, use `ssh.exe`, since the `mister-*` aliases live in the Windows ssh config).
+2. Let it record a few seconds of idle, run the test normally, let it record a few seconds of idle again, then stop the ssh.
+3. The report (`python scripts/perf_report.py capture.csv`, run for you by `perflog.ps1`) prints a per-second timeline, finds the busy stretch (VRAM traffic over 4x the median; `--metric NAME` picks another counter, `--from S --to S` sets it by hand) and prints every counter's total and rate in that window, the idle rate outside it, and the derived figures below.
+
+The perf counters in the OSD (Clear, Freeze) still act on the same counters: don't use them during a capture, the report will flag the jump.
+
+## Taking a measurement (overlay)
 
 1. OSD, Debug page: set `Perf counting` to Run, then press `Clear perf counters`.
 2. Close the OSD and start the test right away (Speedometer Graphics). Time spent idling before the test is counted too; to correct for it, measure an idle stretch of known length the same way.
@@ -20,11 +30,13 @@ Four rows of hex. Rows 1, 3 and 4 hold two counters each (left, right); row 2 is
 | 2 (beats) | ROM ifetch, RAM ifetch | ROM data read, RAM data read | RAM data write, I/O |
 | 3 (request cycles) | ROM ifetch, RAM ifetch | ROM data read, RAM data read | RAM data write, I/O |
 | 4 | VRAM read beats, VRAM read cycles | VRAM write beats, VRAM write cycles | machine-side request cycles, machine-side cycles without ack |
-| 5 (VRAM controller) | read hits in the line cache, line fills issued | read-wait clocks in idle, read-wait clocks behind the write FIFO drain | read-wait clocks behind a scanline DMA burst, read-wait clocks while DDR3 accepts the fill |
-| 6 (VRAM controller) | read-wait clocks on fill data beats, read-wait clocks in idle with a FIFO conflict | fills of the line after the last one filled, refills of a line whose tag is already held | reads acked from another line's beat (must be 0), read-wait clocks under another line's fill tail |
+| 5 (VRAM controller, RAM) | read hits in the line cache, line fills issued | RAM data line (SIZ = 11) read beats (`ram_rd_line`), frame buffer reads through the general path (`vrd_gen`) | read-wait clocks behind a scanline DMA burst, split general-path reads (`vrd_gen_split`) |
+| 6 (MMU, caches, VRAM stores) | table walks started (`walks`), request cycles of RAM data line reads (`ram_rd_linec`) | stores through the general path (`vst_slow`), CINVA/CPUSHA that include the data cache (`dc_flush_all`; was PFLUSH, which the Mac OS never issues) | CINV/CPUSHes reaching the instruction cache (`ic_inv`), lines pushed by CPUSH (`cpush_lines`) |
 
 - Pages 2-4 (except the machine-side pair) watch the CPU's own bus, before the store buffer: a request cycle there is a cycle the bus unit waits on that kind of access. A beat is one acked longword; a line fill is four beats, so ifetch beats / 4 = I-cache misses.
 - Engine idle cycles = cycles minus page 1 and page 0's last counter.
 - IPC = retired / cycles.
 - "Machine side" is after the store buffer (what RAM, ROM and VRAM actually see).
-- Pages 5 and 6 come from `rtl/vram_ddr3.sv` and count its clocks, not beats. Every VRAM read is either a hit or waits for a fill, so hits + fills should match the VRAM read beats on page 4. Page 5 counters 2-5 plus page 6 counter 0 split the waiting clocks by what the DDR3 state machine was doing; page 6 row 4 left must read 0.
+- Pages 5 and 6 mix two sources. From `rtl/vram_ddr3.sv`: line cache hits and fills (every VRAM read is one or the other, so hits + fills should match the VRAM read beats on page 4), read-wait clocks under a DMA burst and on fill data beats, and prefetches issued and used. From the CPU's data engine, counted once per access however many bus beats it takes: frame buffer reads sent straight to the bus (`vrd_fast`) against reads through the general path (`vrd_gen`, and how many of those are split, `vrd_gen_split`), and stores posted (`vst_post`) against stores through the general path (`vst_slow`, `vst_slow_split`). A split access is a misaligned one that needs more than one bus beat. A MOVE16 line (one access, four beats) on the frame buffer counts under `vrd_fast` and `vst_post` since the MOVE16 fast path; before it, under `vrd_gen` and `vst_slow`. These six replaced VRAM wait counters on 2026-11-13, so older captures read differently in slots 32, 33, 35, 37, 38 and 41.
+- Later on 2026-11-13, slots 36, 39, 40 and 41 (fill-beat waits, prefetches issued and used, split general-path stores) became MMU and cache counts from the data engine: table walks started, PFLUSHes, CINV/CPUSHes that reach the instruction cache (one per instruction), and dirty lines CPUSH pushes. `eng_walk / walks` is the average cost of a walk. Captures before this change read differently in those four slots; `perf_report.py` names them by the new meaning.
+- On `diag/ram-ci-counters`, slots 32 (`vrd_fast`) and 37 (`vst_post`), which read 0 once the DMU lost posted VRAM stores and direct VRAM reads, count RAM data beats the CPU marks cache-inhibited (CIOUT): `ram_rd_ci` and `ram_wr_ci`. Comparing them with `b_ram_rd` and `b_ram_wr` shows how much RAM traffic bypasses the data cache.

@@ -21,7 +21,7 @@
 //   C0=45 -> 15.664444 MHz  12" RGB 512x384 -> 60.14 Hz (real DAFB 15.6672)
 //
 // STATIC configuration = C0=28 (25.175 MHz). The reconfig FSM in
-// MacQuadra800.sv inits its change-detect to this value, so a 13" boot
+// MacLC475.sv inits its change-detect to this value, so a 13" boot
 // performs NO runtime reconfig at all: MacLC's first pixel-clock build did a
 // boot-time retarget and the PLL unlock/relock glitched CLK_VIDEO while the
 // HPS was mounting SD images and ascal was locking (BERR storm, hard wedge).

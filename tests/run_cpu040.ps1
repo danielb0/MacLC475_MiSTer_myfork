@@ -17,10 +17,10 @@ try {
         rtl/ap68040_faster/rtl/ap68040_lc040_pkg.sv `
         rtl/ap68040_faster/rtl/ap68040_lc040.sv `
         tests/tb_lc040_decode.sv tests/tb_lc040_ucode.sv `
-        rtl/quadra_bus040.sv tests/tb_quadra_bus040.sv `
+        rtl/bus040.sv tests/tb_bus040.sv `
         *> local/tests/cpu040_compile.log
     if ($LASTEXITCODE) { throw 'ModelSim compilation failed; see local/tests/cpu040_compile.log' }
-    foreach ($bench in @('tb_quadra_bus040', 'tb_lc040_decode', 'tb_lc040_ucode')) {
+    foreach ($bench in @('tb_bus040', 'tb_lc040_decode', 'tb_lc040_ucode')) {
         $log = "local/tests/$bench.log"
         & "$ModelSimBin/vsim.exe" -c -lib $library $bench `
             -do 'onerror {quit -f -code 1}; onbreak {quit -f -code 1}; run -all; quit -f -code 0' -l $log

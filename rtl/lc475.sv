@@ -1,5 +1,5 @@
 //============================================================================
-//  quadra605 - stock LC040 and MEMCjr machine integration.
+//  lc475 - stock LC040 and MEMCjr machine integration.
 //  RAM, ROM and VRAM share the platform beat port.
 //
 //  Physical map:
@@ -17,7 +17,7 @@
 //  memsel=ROM must be discarded but still acked.
 //============================================================================
 
-module quadra605
+module lc475
 #(
 	parameter AP040_HAS_FPU = 0,              // stock 68LC040
 	parameter CLK_HZ        = 25_000_000,
@@ -54,8 +54,9 @@ module quadra605
 	input         nreset_vid,
 
 	// 4 MB soldered RAM plus an optional SIMM, latched on reset.
-	// 0=4 MB, 1=5 MB, 2=6 MB, 3=8 MB, 4=12 MB, 5=20 MB, 6=36 MB.
-	input   [2:0] ram_cfg,
+	// 0=4 MB, 1=5 MB, 2=6 MB, 3=8 MB, 4=12 MB, 5=20 MB, 6=36 MB,
+	// 7=68 MB, 8=100 MB.
+	input   [3:0] ram_cfg,
 	input   [1:0] mon_sel,       // DAFB monitor (dafb.sv): 0 = 13" 640x480, 1 = 12" 512x384
 
 	// platform memory beat port
@@ -167,6 +168,8 @@ module quadra605
 	input         perf_clear,
 	input         perf_freeze,
 	input  [11:0] perf_vram_ev,
+	input   [5:0] perf_rd_idx,        // one counter by number, for the DDR3
+	output [31:0] perf_rd_data,       // snapshot (MacLC475.sv perf_ddr_*)
 	input  [15:0] video_platform_status,
 
 	// built-in Ethernet: the OSD switch (latched under reset by the top) and the
@@ -216,6 +219,7 @@ wire  [1:0] bus_size;
 wire [31:0] bus_addr, bus_wdata;
 wire  [2:0] bus_fc;
 wire        bus_ack;
+wire        bus_vram_wr_now;
 wire [31:0] bus_rdata;
 wire        bus_ack_adapter;
 wire [31:0] bus_rdata_adapter;
@@ -226,7 +230,7 @@ reg  [31:0] bus_line_rdata;
 reg         bus_miss_ack;
 reg  [31:0] bus_miss_rdata;
 
-assign bus_ack   = bus_line_ack || bus_miss_ack || bus_ack_adapter;
+assign bus_ack   = bus_line_ack || bus_miss_ack || bus_ack_adapter || bus_vram_wr_now;
 assign bus_rdata = bus_line_ack ? bus_line_rdata :
 	               bus_miss_ack ? bus_miss_rdata : bus_rdata_adapter;
 
@@ -338,7 +342,7 @@ startup_probe startup (
 );
 wire [223:0] perf_rows;
 `ifdef CPU_AP68040
-quadra_cpu040 #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
+cpu040 #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 `else
 wombat_cpu #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 `endif
@@ -390,7 +394,8 @@ wombat_cpu #(.AP040_HAS_FPU(AP040_HAS_FPU)) cpu (
 	.debug_instruction_pc(cpu_instruction_pc),
 	.perf_clear(perf_clear), .perf_freeze(perf_freeze), .perf_page(perf_page),
 	.perf_vram_ev(perf_vram_ev),
-	.perf_rows(perf_rows)
+	.perf_rows(perf_rows),
+	.perf_rd_idx(perf_rd_idx), .perf_rd_data(perf_rd_data)
 );
 
 `ifdef CPU_AP68040
@@ -844,6 +849,19 @@ wire cpu_want = walker_pend || bus_first_miss || bus_wr_direct || bus_vram_direc
                 (b_req && !b_ack && !cpu_berr && !line_cpu_wait);
 wire dma_take = (SONIC != 0) && dma_req && !dma_ack && !walker_pend &&
                 (dma_turn || !cpu_want);
+// A VRAM write inside one longword is acknowledged in the clock it is
+// taken (the strobe below is registered as before), so the bus is free
+// for the read behind it a clock sooner: QuickDraw's read/modify/write
+// loops wait for exactly this.  A spanning write keeps the registered
+// acknowledge of its second half.  This needs the store buffer in
+// cpu040: it holds the acknowledge of an unbuffered write, which
+// arrives in the CPU's TS clock, for the clock TA is sampled in.
+`ifdef AP040_STORE_BUFFER_OFF
+localparam VRAM_WR_NOW = 0;
+`else
+localparam VRAM_WR_NOW = 1;
+`endif
+assign bus_vram_wr_now = (VRAM_WR_NOW != 0) && bus_vram_direct && !bus_wr_span && !dma_take;
 
 assign dbg_berr      = (svc == S_BERR);
 assign dbg_berr_addr = {svc_addr, 2'b00};
@@ -976,6 +994,11 @@ always @(posedge clk) begin
 				if (bus_vram_fast) begin
 					// answered by the line acknowledge above; nothing to launch
 				end
+				else if (bus_vram_rd && mem_vram_wp) begin
+					// a read of the longword the write strobe is landing in:
+					// the line cache answers it next clock (a fast hit),
+					// where S_MEM would take four
+				end
 				else if (bus_first_miss || bus_vram_rd || bus_rom_first) begin
 					svc_walker     <= 0;
 					svc_bus_direct <= 1;
@@ -1021,10 +1044,11 @@ always @(posedge clk) begin
 						wr_split_be   <= 4'b1111 << (4'd8 - {1'b0, bus_wr_end});
 						wr_split_data <= bus_wr_left << {3'd4 - {1'b0, bus_addr[1:0]}, 3'd0};
 					end
-					else begin
+					else if (VRAM_WR_NOW == 0) begin
 						bus_miss_ack   <= 1;
 						bus_miss_rdata <= 0;
 					end
+					// (otherwise acknowledged now: bus_vram_wr_now)
 				end
 				else if (!walker_pend && line_cpu_match) begin
 					b_ack   <= 1;

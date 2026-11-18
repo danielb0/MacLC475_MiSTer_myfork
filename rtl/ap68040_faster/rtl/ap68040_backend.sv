@@ -152,6 +152,7 @@ module ap68040_backend
 	output logic        dbg_retire,
 	output logic        dbg_retire2,    // ... and a second instruction (the second slot)
 	output logic        halted,
+	output logic [255:0] dbg_trap,      // last F-line / illegal trap (diag)
 	output logic        fetch_stop      // no new instruction fetches: stopped
                                         // (STOP) or halted
 );
@@ -1721,6 +1722,71 @@ always_comb begin
 		x_nsr[10:8] = irq_lvl;
 	end
 end
+
+// diag: the last F-line (vector 11) or illegal (vector 4) trap taken at WB,
+// for the perf-counter DDR3 snapshot.  The opword and first extension word
+// are those of the last F-line uop to enter EX (the LC040 path); bit 19 of
+// word 2 says they belong to the trapping instruction.
+//   [31:0]   {F-line count, illegal count}   (16 bits each, saturating)
+//   [63:32]  PC of the trapping instruction
+//   [95:64]  {vector, format, opword valid, 3'b0, opword}
+//   [127:96]  zero
+//   [159:128] PC of the first instruction to commit after the trap (the
+//             handler's entry)
+//   [255:160] zero
+logic [31:0] tr_hpc, tr_pc1, tr_pc2;
+logic [15:0] tr_op1, tr_op2;
+logic        tr_hwait;
+logic [15:0] tr_ow, tr_ew, tr_nf, tr_ni;
+logic [31:0] tr_owpc, tr_pc;
+logic [15:0] tr_op, tr_xa, tr_cap_ew;
+logic  [7:0] tr_vec;
+logic  [3:0] tr_fmt;
+logic        tr_owv;
+always_ff @(posedge clk) begin
+	if (!nreset) begin
+		tr_nf <= 0; tr_ni <= 0; tr_pc <= 0; tr_op <= 0; tr_xa <= 0;
+		tr_vec <= 0; tr_fmt <= 0; tr_owv <= 0; tr_cap_ew <= 0;
+		tr_ow <= 0; tr_ew <= 0; tr_owpc <= 0;
+		tr_hpc <= 0; tr_pc1 <= 0; tr_pc2 <= 0; tr_op1 <= 0; tr_op2 <= 0;
+		tr_hwait <= 0;
+	end
+	else begin
+		if (tr_hwait && wb_commit && !wb_u.exr) begin
+			tr_hpc   <= wb_u.pc;
+			tr_hwait <= 1'b0;
+		end
+		if (adv_ex && ex_v && ex_is_fp && ex_u.cond == 4'd0) begin
+			tr_ow   <= ex_b[15:0];
+			tr_ew   <= ex_a[15:0];
+			tr_owpc <= ex_u.pc;
+		end
+		if (adv_wb && wb_is_exc && (wb_exc == 8'd11 || wb_exc == 8'd4)) begin
+			if (wb_exc == 8'd11) begin
+				if (tr_nf != 16'hFFFF) tr_nf <= tr_nf + 1'b1;
+			end
+			else if (tr_ni != 16'hFFFF) tr_ni <= tr_ni + 1'b1;
+			tr_pc2    <= tr_pc1;
+			tr_op2    <= tr_op1;
+			tr_pc1    <= tr_pc;
+			tr_op1    <= tr_op;
+			tr_hwait  <= 1'b1;
+			tr_pc     <= wb_u.pc;
+			tr_vec    <= x_vec;
+			tr_fmt    <= x_fmt;
+			tr_owv    <= (tr_owpc == wb_u.pc);
+			tr_op     <= tr_ow;
+			tr_cap_ew <= tr_ew;
+			tr_xa     <= x_addr[15:0];
+		end
+	end
+end
+assign dbg_trap = {96'd0,
+                   tr_hpc,
+                   32'd0,
+                   tr_vec, tr_fmt, tr_owv, 3'b000, tr_op,
+                   tr_pc,
+                   tr_nf, tr_ni};
 
 // an access error of a MOVEM transfer in an indexed or PC-relative mode,
 // or of a continued MOVEM (also its refetch), sets CM and stacks the EA

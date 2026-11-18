@@ -19,7 +19,7 @@ localparam TRANSLATE = 0, INDIRECT = 1, USER_ROOT = 2, NONRESIDENT = 3,
            WRITE_PROTECT = 4, SUPERVISOR_ONLY = 5, TABLE_ERROR = 6, COPYBACK = 7;
 localparam [31:0] VIRTUAL_DATA = 32'h01000000, MAILBOX = 32'h50000000;
 
-quadra_cpu040 #(.AP040_HAS_FPU(0)) dut (
+cpu040 #(.AP040_HAS_FPU(0)) dut (
     .clk(clk), .nreset(nreset), .ce(1'b1), .ipl(3'b111),
     .ipl_autovector(1'b1), .berr(berr), .stall_hold(1'b0), .dbg_stall_flt(stall),
     .cache_line_valid(1'b0), .cache_line_tag(28'd0), .cache_line_data(128'd0),

@@ -1,5 +1,5 @@
 // MC68040 pins to the machine's right-aligned transaction bus, one clock.
-module quadra_bus040 #(
+module bus040 #(
     parameter STALL_BITS = 24
 ) (
     input clk, nreset, stall_hold,

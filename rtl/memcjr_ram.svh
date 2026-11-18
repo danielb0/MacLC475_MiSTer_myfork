@@ -4,7 +4,7 @@
 function automatic [30:0] ram_map;
 	input [31:2] a;
 	reg [11:0] row, col;
-	reg [21:0] cell_addr;
+	reg [23:0] cell_addr;
 	reg [29:0] backing;
 	reg present, mode;
 	integer n, selected;
@@ -25,27 +25,47 @@ function automatic [30:0] ram_map;
 		cell_addr = 0;
 		backing = 0;
 		if (selected == 0) begin
-			cell_addr = {2'd0, row[9:0], col[9:0]};
+			cell_addr = {4'd0, row[9:0], col[9:0]};
 		end else if (selected == 1 || selected == 2) begin
-			// Representative x4 SIMMs: one or two 1/4/16 MB ranks.
+			// Representative x4 SIMMs: one or two 1/4/16 MB ranks, one 64 MB
+			// rank (12x12, 16M x4 parts), or a 96 MB "tweener" with a 64 MB
+			// rank 1 and a 32 MB rank 2.  The 64 MB rank lives in the top half
+			// of a 128 MB SDRAM module, clear of the floppy image at 36 MB;
+			// the 32 MB rank sits below the image.
 			case (ram_cfg)
-				3'd1, 3'd2: begin
-					cell_addr = {4'd0, row[8:0], col[8:0]};
+				4'd1, 4'd2: begin
+					cell_addr = {6'd0, row[8:0], col[8:0]};
 					backing = (selected == 1) ? 30'h0100000 : 30'h0140000;
 				end
-				3'd3, 3'd4: begin
-					cell_addr = {2'd0, row[9:0], col[9:0]};
+				4'd3, 4'd4: begin
+					cell_addr = {4'd0, row[9:0], col[9:0]};
 					backing = (selected == 1) ? 30'h0100000 : 30'h0200000;
 				end
-				3'd5, 3'd6: begin
-					cell_addr = {row[10:0], col[10:0]};
+				4'd5, 4'd6: begin
+					cell_addr = {2'd0, row[10:0], col[10:0]};
 					backing = (selected == 1) ? 30'h0100000 : 30'h0500000;
+				end
+				4'd7: begin
+					cell_addr = {row[11:0], col[11:0]};
+					backing = 30'h1000000;
+				end
+				4'd8: begin
+					if (selected == 1) begin
+						cell_addr = {row[11:0], col[11:0]};
+						backing = 30'h1000000;
+					end else begin
+						// Mod-32 MB decode: the ROM places this rank at 68 MB, so
+						// it spans a 32 MB boundary and must ignore A25.
+						cell_addr = {1'b0, a[24:2]};
+						backing = 30'h0100000;
+					end
 				end
 				default: present = 0;
 			endcase
-			if (selected == 2 && ram_cfg != 3'd2 && ram_cfg != 3'd4 && ram_cfg != 3'd6)
+			if (selected == 2 && ram_cfg != 4'd2 && ram_cfg != 4'd4 &&
+			    ram_cfg != 4'd6 && ram_cfg != 4'd8)
 				present = 0;
 		end else present = 0;
-		ram_map = {present, backing + {8'd0, cell_addr}};
+		ram_map = {present, backing + {6'd0, cell_addr}};
 	end
 endfunction

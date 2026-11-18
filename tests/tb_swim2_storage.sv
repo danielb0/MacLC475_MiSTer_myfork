@@ -291,7 +291,7 @@ task save_transfer;
             sd_buff_addr = w; cycle;
             check(sd_buff_din, {written(w*2+1), written(w*2)});
             transfer_buffer[w] = sd_buff_din;
-            check(sd_lba, target_lba); check(host_owned, 1); check(buffer_owned, 1);
+            check(sd_lba, target_lba); check(host_owned, 1); check(save_valid, 1); check(buffer_owned, 0);
         end
         sd_ack = 0; cycle;
         repeat (8) cycle; check(save_ready, 0); check(flush_ack, 0);
@@ -337,7 +337,7 @@ initial begin
     guest_reset = 1; context_changed = 1; host_control(1);
     save_transfer; save_result(1);
     repeat (8) begin
-        cycle; check(host_owned, 1); check(mounted, 1); check(buffer_owned, 1);
+        cycle; check(host_owned, 1); check(mounted, 1); check(save_valid, 1); check(buffer_owned, 0);
         check(releases, 0); check(flush_ack, 0);
     end
     check(saves, 0); check(file_data[0], original(0)); check(fault, 1);
@@ -368,7 +368,7 @@ initial begin
         save_transfer;
         // A delayed durable result must retain the exact sector and payload.
         repeat (100) begin
-            cycle; check(save_ready, 0); check(buffer_owned, 1);
+            cycle; check(save_ready, 0); check(save_valid, 1); check(buffer_owned, 0);
             check(sd_lba, target_lba);
         end
         if (sequence_index == 3) begin

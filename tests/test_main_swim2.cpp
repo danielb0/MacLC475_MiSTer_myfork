@@ -83,7 +83,7 @@ uint16_t fpga_spi(uint16_t value)
     return 0;
 }
 
-int user_io_file_mount(const char *name, unsigned char index, char pre, int pre_size)
+int user_io_file_mount(const char *name, unsigned char index, char pre, int pre_size, int)
 {
     assert(!enabled && !name[0] && index == 6 && !pre && !pre_size);
     assert(swim2_can_mount(index, true));

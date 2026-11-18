@@ -127,7 +127,7 @@
   },
   {
     "source": "rtl/quadra800.sv",
-    "destination": "rtl/quadra605.sv",
+    "destination": "rtl/lc475.sv",
     "sha256": "f5ca4ae0fd7974abace04423bd65013ee5f1e5dc125384e401266cafd36173b4",
     "repository": "https://github.com/meauxdal/MacQuadra800_MiSTer.git",
     "revision": "689f03d9f5b634062547d1b33d83624ee126604e",
@@ -938,7 +938,7 @@
   },
   {
     "source": "rtl/quadra_cpu040.sv",
-    "destination": "rtl/quadra_cpu040.sv",
+    "destination": "rtl/cpu040.sv",
     "sha256": "a9ceec44619effe1e9d8234b14fcabae018c349f35ebf0a538a0a7d1c353d0f7",
     "sha256_lf": "a9ceec44619effe1e9d8234b14fcabae018c349f35ebf0a538a0a7d1c353d0f7",
     "repository": "https://github.com/alanswx/MacQuadra800_MiSTer.git",

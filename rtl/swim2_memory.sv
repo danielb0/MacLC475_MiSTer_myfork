@@ -38,7 +38,8 @@ module swim2_memory (
     output reg   fault = 0
 );
 
-// All populated MEMCjr banks lie below byte 36 MiB, including aliases.
+// All populated MEMCjr banks lie below byte 36 MiB, including aliases, except
+// the 64 MB rank of the 68 MB and 100 MB options, which sits at 64-128 MiB.
 localparam [26:0] IMAGE_BASE = 27'h2400000;
 localparam IDLE = 2'd0, WAIT_ACK = 2'd1, TURN = 2'd2, DRAIN = 2'd3;
 localparam CPU = 2'd0, LOAD = 2'd1, WRITE = 2'd2, READ = 2'd3;

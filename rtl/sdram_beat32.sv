@@ -2,8 +2,8 @@
 //  sdram_beat32 — 32-bit machine beats on the 16-bit MiSTer SDRAM controller.
 //
 //  Wraps rtl/sdram.sv (Sorgelig's, from NeoGeo_MiSTer) and the clk_sys <->
-//  clk_ram handshake that used to live inline in MacQuadra800.sv.  Three things
-//  here that the plain two-access bridge did not do:
+//  clk_ram handshake that used to live inline in the donor's MacQuadra800.sv.
+//  Three things here that the plain two-access bridge did not do:
 //
 //  * A READ FILLS A 16-BYTE LINE.  The controller programs BURST_LENGTH=8,
 //    so one READ returns four aligned longwords.  All four are retained in
@@ -20,7 +20,7 @@
 //
 //  * WRITES ARE POSTED, THROUGH AN EIGHT-ENTRY FIFO.  A write is acknowledged
 //    as it enters the FIFO (from the beat port, or from the registered push
-//    port quadra800 drives straight from the store buffer), and clk_ram
+//    port lc475 drives straight from the store buffer), and clk_ram
 //    drains the FIFO back to back.  A read starts only once the FIFO is
 //    empty, and clk_ram also drains queued writes before it takes a read,
 //    so a read always sees every earlier write.  Before 2026-09-23 a posted
@@ -174,7 +174,7 @@ reg   [3:0] wq_rp_handoff = 0;       // wq_rp seen on clk_ram's falling edge
 // The read pointer crosses into clk_sys through one plain register, and
 // everything clk_sys derives from it (full, empty, room) is computed from
 // that register: the falling-edge handoff leaves half a clk_ram period, which
-// the room decision's path into quadra800's write registers did not meet
+// the room decision's path into lc475's write registers did not meet
 // (P186 fit, -1.369 ns).  The extra clock only overstates the fill.
 reg   [3:0] wq_rp_sys = 0;
 always @(posedge clk_sys) wq_rp_sys <= wq_rp_handoff;

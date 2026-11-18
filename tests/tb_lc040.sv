@@ -12,7 +12,7 @@ module tb_lc040;
     wire [255:0] debug_status;
     wire halted;
 `ifdef CPU_AP68040
-    quadra_cpu040 #(.AP040_HAS_FPU(0)) dut (
+    cpu040 #(.AP040_HAS_FPU(0)) dut (
 `else
     wombat_cpu #(.AP040_HAS_FPU(0), .AP040_ENABLE_CACHE(0),
                  .AP040_STORE_BUFFER(0)) dut (

@@ -20,14 +20,33 @@
 // Page 4: VRAM read beats, VRAM read cycles, VRAM write beats, VRAM write
 //         cycles, machine-side (after the store buffer) request cycles,
 //         machine-side request cycles without an ack
-// Page 5: VRAM controller (vram_ddr3), reads: hits in the line cache, line
-//         fills issued, then read-wait cycles with the DDR3 state machine
-//         at: idle, write drain, DMA burst, DDR3 accepting the fill
-// Page 6: VRAM controller, more read-wait cycles and fill events: read-wait
-//         cycles on fill data beats, read-wait cycles in idle with a FIFO
-//         conflict, fills of the next sequential line, refills of a held
-//         tag, reads acked from another line's beat (must be 0), read-wait
-//         cycles under another line's fill tail
+// Page 5: VRAM controller (vram_ddr3) hits in the line cache and line
+//         fills issued; CPU frame buffer reads sent straight to the bus
+//         and reads through the engine's general path; VRAM read-wait
+//         cycles under a DMA burst; general-path reads that are split
+// Page 6: table walks started; CPU frame buffer stores posted and
+//         stores through the general path; CINVA/CPUSHA with the DC;
+//         CINV/CPUSHes reaching the instruction cache; lines pushed by
+//         CPUSH (the four MMU/cache counts replaced VRAM controller ones
+//         on 2026-11-13: fill-beat waits, prefetches issued and used,
+//         split general-path stores)
+// The CPU-side counts on pages 5 and 6 are accesses as the data engine
+// takes them (ap68040_dmu dbg_perf), one each however many bus beats; they
+// replaced VRAM wait counters, so captures before 2026-11-13 read
+// differently in slots 32, 33, 35, 37, 38 and 41.
+//
+// Slots 32 and 37 (frame buffer reads sent straight to the bus, stores
+// posted) read 0 since the DMU lost those paths.  They now split RAM data
+// reads by size: slot 32 counts line (SIZ = 11) read beats, slot 37 the
+// request cycles of those line reads.  Against b_ram_rd and r_ram_rd that
+// gives fills vs single reads and the cycles per beat of each.  (A
+// 2026-11-17 capture counting CIOUT here found no cache-inhibited RAM data
+// beats at all.)  Slot 39 (was PFLUSH, which the Mac OS never issues)
+// counts CINV/CPUSH of the whole data cache (CINVA/CPUSHA DC or BC).
+//
+// rd_idx/rd_data read any one counter by number (0-41, page * 6 + slot) for
+// the DDR3 snapshot (MacLC475.sv perf_ddr_*): no clear or freeze needed,
+// the reader differences successive snapshots.
 //
 // The CPU side is the CPU's own bus, before the store buffer: a request
 // cycle there is a cycle the CPU's bus unit waits.  Beats are acked
@@ -40,17 +59,22 @@ module perf_counters (
 	input       [2:0] page,
 
 	input             retire, retire2,
-	input       [5:0] core,        // ap68040 dbg_perf
+	input      [15:0] core,        // ap68040 dbg_perf
 
 	input             c_req, c_ack, c_write, c_instr,
+	input             c_line,          // a line transfer (SIZ = 11)
 	input      [31:0] c_addr,
 	input             m_req, m_ack,
 	input      [11:0] vram_ev,         // vram_ddr3 event strobes, pages 5-6
+	input     [255:0] trap,            // ap68040 dbg_trap: read as 42-49
 
 	output     [63:0] row1,
 	output     [31:0] row2,
 	output     [63:0] row3,
-	output     [63:0] row4
+	output     [63:0] row4,
+
+	input       [5:0] rd_idx,
+	output     [31:0] rd_data
 );
 
 localparam N = 42;
@@ -61,6 +85,8 @@ wire ram  = c_addr[31:30] == 2'b00;
 wire vram = c_addr[31:21] == 11'b1111_1001_000;
 wire io   = !rom && !ram && !vram;
 wire beat = c_req && c_ack;
+wire ram_rd_line  = beat  && ram && !c_instr && !c_write && c_line;  // slot 32
+wire ram_rd_linec = c_req && ram && !c_instr && !c_write && c_line;  // slot 37
 
 // one request-cycle event per category; beats are the same and c_ack
 wire [5:0] cat = {
@@ -73,8 +99,9 @@ wire [5:0] cat = {
 };
 
 wire [N-1:0] ev = {
-	// pages 5 and 6
-	vram_ev,
+	// pages 5 and 6: vram_ddr3's events, six replaced by the core's
+	core[15:13], core[10], ram_rd_linec, core[12],
+	core[8], vram_ev[4], core[7], ram_rd_line, vram_ev[1:0],
 	// page 4
 	m_req && !m_ack, m_req,
 	c_req && vram && c_write, beat && vram && c_write,
@@ -116,5 +143,10 @@ assign row1 = {cnt[base], cnt[base + 6'd1]};
 assign row2 = {12'hC00, 1'b0, pg, 3'd0, freeze, 3'd0, ovf, 8'h00};
 assign row3 = {cnt[base + 6'd2], cnt[base + 6'd3]};
 assign row4 = {cnt[base + 6'd4], cnt[base + 6'd5]};
+
+// 42-49 are not counters: the CPU's last F-line / illegal trap capture
+wire [5:0] trap_k = rd_idx - 6'd42;
+assign rd_data = (rd_idx < N)      ? cnt[rd_idx] :
+                 (rd_idx < 6'd50)  ? trap[trap_k[2:0] * 32 +: 32] : 32'd0;
 
 endmodule

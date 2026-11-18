@@ -17,8 +17,6 @@ if [ ! -f "$source_dir/Makefile" ]; then
     echo "Missing Main checkout: $source_dir" >&2
     exit 1
 fi
-git -C "$source_dir" apply --reverse --check "$root/patches/Main_MiSTer-q605.patch"
-git -C "$source_dir" apply --reverse --check "$root/patches/Main_MiSTer-swim2.patch"
 
 if [ ! -x "$tool_bin/arm-none-linux-gnueabihf-gcc" ]; then
     mkdir -p "$tool_root"

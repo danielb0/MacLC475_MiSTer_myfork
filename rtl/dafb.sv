@@ -70,7 +70,7 @@ module dafb
 	output [21:2] vid_addr,
 	input  [31:0] vid_rdata,
 	// the programmed row pitch, so the platform's VRAM mapper can compact
-	// away the never-visible tail of each row (see MacQuadra800.sv)
+	// away the never-visible tail of each row (see MacLC475.sv)
 	output [13:0] vid_stride,
 
 	// DDR3 Scanline DMA handshake & Ping-Pong cache interface
@@ -322,7 +322,7 @@ end
 // guest programs them once per mode set and then redraws the whole screen, so
 // a 2FF sync per bit is enough and the worst case on a change is one torn
 // frame.  MacLC does exactly this (maclc_v8_video.sv *_meta stages); the meta
-// stages are false-pathed in MacQuadra800.sdc.
+// stages are false-pathed in MacLC475.sdc.
 //----------------------------------------------------------------------------
 reg [20:0] fb_base_meta, fb_base_v;
 reg [13:0] stride_meta,  stride_v;

@@ -135,12 +135,7 @@ to `../swim2_host.sv` through stock `hps_io.EXT_BUS`.
   short reads, EOF, seek or stream errors. Zero payload on failure completes
   the transfer but its error result prevents publication. Retry gets a new
   token; stale results cannot authorize another attempt.
-- `mount_owned` must cover loader acquisition, loading and media ownership
-  through release, including periods without a pending save. Main's separate
-  `patches/Main_MiSTer-swim2.patch` checks it before changing a slot-6 handle.
-  Host replacement requires completed release. `../swim2_host_control.sv`
-  routes host eject to loader cancellation before publication or media release
-  after publication. Connect storage's `release_request` to the subsystem.
+- `mount_owned` must cover loader acquisition, loading and media ownership through release, including periods without a pending save. Main's `support/mac/swim2.cpp` (merged into our Main_MiSTer) checks it before changing a slot-6 handle. Host replacement requires completed release. `../swim2_host_control.sv` routes host eject to loader cancellation before publication or media release after publication. Connect storage's `release_request` to the subsystem.
 - Command `0x0c` snapshots seven words: `0x5343`, status, mount token low/high,
   two reserved zero words and slot 6. Status is `0x0100` plus owned, eject pending,
   live, loader fault, writer fault and token exhausted in bits 0-5. Command
