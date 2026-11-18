@@ -76,7 +76,10 @@ wire [7:0] mfm_buf, gcr_buf;
 wire [8:0] buf_addr;
 wire [7:0] buf_data;
 wire commit_ready, commit_busy, commit_done, commit_rejected;
-wire commit_offer = pending && commit_ready && !read_busy;
+// The persistence snapshot holds one sector until the host save completes, so
+// the next commit (which refills that snapshot) waits for the notification to
+// retire. The decoder buffer stays owned meanwhile.
+wire commit_offer = pending && commit_ready && !read_busy && !save_valid && !commit_done;
 wire mount_accept = mount_valid && mount_ready;
 wire stream_reset = guest_reset || context_changed || !mounted ||
                     !selected || !motor || !write_active || !write_enable ||
@@ -89,7 +92,11 @@ assign releasing = state != RUN || release_request;
 assign mount_ready = nreset && !mounted && !releasing && !flush_ack && !wr_ack && !read_busy;
 assign media_changed = nreset && (mount_accept || release_done);
 // sector_valid closes the ownership gap before pending is registered.
-assign buffer_owned = sector_valid || pending || commit_busy || commit_done || save_valid;
+// A sector whose save is outstanding is already in image RAM and in the
+// persistence snapshot, so it no longer owns the decoder buffer. Holding the
+// stream for the host write and fsync (milliseconds) made the next physical
+// sector's write report underrun (.Sony wrUnderrun, -74).
+assign buffer_owned = sector_valid || pending || commit_busy || commit_done;
 assign stream_enable = nreset && !stream_reset && !buffer_owned && !write_fault &&
                        (!gcr || gcr_ready);
 assign sector_valid = gcr_valid || mfm_valid;
@@ -184,7 +191,7 @@ always @(posedge clk) begin
         end
         case (state)
             RUN: if (release_request) state <= DRAIN;
-            DRAIN: if (!buffer_owned && !read_busy && !wr_ack && !flush_ack) state <= FLUSH;
+            DRAIN: if (!buffer_owned && !save_valid && !read_busy && !wr_ack && !flush_ack) state <= FLUSH;
             FLUSH: if (flush_ack) state <= FLUSH_TURN;
             FLUSH_TURN: if (!flush_ack) begin
                 mounted <= 0;
