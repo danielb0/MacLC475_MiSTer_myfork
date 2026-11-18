@@ -171,7 +171,7 @@ perf_counters perf (
 	.clk(clk), .clear(perf_clear), .freeze(perf_freeze), .page(perf_page),
 	.retire(dbg_pev[56]), .retire2(dbg_pev[57]), .core(dbg_perf),
 	.c_req(cpu_bus_req), .c_ack(cpu_bus_ack), .c_write(cpu_bus_write),
-	.c_instr(cpu_bus_instr), .c_addr(cpu_bus_addr),
+	.c_instr(cpu_bus_instr), .c_line(c_siz == 2'b11), .c_addr(cpu_bus_addr),
 	.m_req(bus_req), .m_ack(bus_ack), .vram_ev(perf_vram_ev),
 	.trap(dbg_trap),
 	.row1(perf_rows[223:160]), .row2(perf_rows[159:128]),

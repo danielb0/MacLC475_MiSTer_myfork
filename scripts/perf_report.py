@@ -35,10 +35,10 @@ NAMES = [
     "vram_rd_beats", "vram_rd_cyc", "vram_wr_beats", "vram_wr_cyc",
     "m_req_cyc", "m_noack_cyc",
     # page 5: vram_ddr3
-    "v_hit", "v_fill", "vrd_fast", "vrd_gen", "v_wait_dma",
+    "v_hit", "v_fill", "ram_rd_line", "vrd_gen", "v_wait_dma",
     "vrd_gen_split",
     # page 6
-    "walks", "vst_post", "vst_slow", "pflush",
+    "walks", "ram_rd_linec", "vst_slow", "dc_flush_all",
     "ic_inv", "cpush_lines",
 ]
 IDX = {n: i for i, n in enumerate(NAMES)}
@@ -146,10 +146,19 @@ def report(ds, lo, hi):
     vr = g("vram_rd_beats")
     print("  VRAM hits+fills vs reads %d vs %d" % (g("v_hit") + g("v_fill"),
                                                    vr))
-    print("  VRAM reads fast / general (split)  %d / %d (%d)" % (
-        g("vrd_fast"), g("vrd_gen"), g("vrd_gen_split")))
-    print("  VRAM stores posted / slow          %d / %d" % (
-        g("vst_post"), g("vst_slow")))
+    print("  VRAM reads general (split)         %d (%d)" % (
+        g("vrd_gen"), g("vrd_gen_split")))
+    print("  VRAM stores                        %d" % g("vst_slow"))
+    # (slots 32 and 37: RAM data line reads, beats and request cycles;
+    # 41479fa counted CIOUT beats there, older captures frame buffer
+    # counts)
+    lb, lc = g("ram_rd_line"), g("ram_rd_linec")
+    sb, sc = g("b_ram_rd") - lb, g("r_ram_rd") - lc
+    print("  RAM data line fills / single reads %d / %d" % (lb // 4, sb))
+    if lb:
+        print("  RAM line read cycles / beat        %.2f" % (lc / lb))
+    if sb:
+        print("  RAM single read cycles / read      %.2f" % (sc / sb))
     if vr:
         print("  VRAM read cycles / beat  %.2f" % (g("vram_rd_cyc") / vr))
     vw = g("vram_wr_beats")
@@ -158,8 +167,9 @@ def report(ds, lo, hi):
     # (since the next-line prefetch, a read acked by a prefetch's fill
     # beat counts as neither a hit nor a fill, so hits+fills can fall short)
     w = g("walks")
-    print("  table walks %d, PFLUSH %d, I-cache CINV/CPUSH %d, CPUSH lines %d"
-          % (w, g("pflush"), g("ic_inv"), g("cpush_lines")))
+    print("  table walks %d, CINVA/CPUSHA DC %d, I-cache CINV/CPUSH %d, "
+          "CPUSH lines %d"
+          % (w, g("dc_flush_all"), g("ic_inv"), g("cpush_lines")))
     if w:
         print("  cycles / table walk      %.1f" % (g("eng_walk") / w))
 

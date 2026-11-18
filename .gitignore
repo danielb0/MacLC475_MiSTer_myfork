@@ -21,3 +21,4 @@ jtag.cdf
 *.wlf
 __pycache__/
 refs/
+AGENTS.md

@@ -56,20 +56,22 @@ task automatic perf_check(input integer runs);
     // split, so a store is one beat; a read can be discarded after dispatch.
     // A MOVE16 is one access and four beats each way: a run's 256 from
     // VRAM read 768 beats more than accesses, its 512 to VRAM write 1536
-    // more (the counters run on across the runs)
+    // more (the counters run on across the runs).  Slots 32 and 37 (the
+    // fast reads and posted stores, both gone from the DMU) count RAM data
+    // line reads now: all VRAM accesses take the general path.
     m16r = 768 * runs;
     m16w = 1536 * runs;
-    if (dut.cpu.perf.cnt[37] + dut.cpu.perf.cnt[38] + m16w != dut.cpu.perf.cnt[26] ||
+    if (dut.cpu.perf.cnt[38] + m16w != dut.cpu.perf.cnt[26] ||
         dut.cpu.perf.cnt[35] != 0 ||
-        dut.cpu.perf.cnt[32] + dut.cpu.perf.cnt[33] + m16r < dut.cpu.perf.cnt[24] ||
-        dut.cpu.perf.cnt[32] + dut.cpu.perf.cnt[33] + m16r >
+        dut.cpu.perf.cnt[33] + m16r < dut.cpu.perf.cnt[24] ||
+        dut.cpu.perf.cnt[33] + m16r >
             dut.cpu.perf.cnt[24] + dut.cpu.perf.cnt[24] / 50)
-        $fatal(1, "VRAM path counters disagree: reads fast %0d + general %0d vs beats %0d, stores posted %0d + slow %0d vs beats %0d",
-               dut.cpu.perf.cnt[32], dut.cpu.perf.cnt[33], dut.cpu.perf.cnt[24],
-               dut.cpu.perf.cnt[37], dut.cpu.perf.cnt[38], dut.cpu.perf.cnt[26]);
-    $display("PASS: VRAM reads fast %0d + general %0d vs beats %0d, stores posted %0d + slow %0d vs beats %0d",
-             dut.cpu.perf.cnt[32], dut.cpu.perf.cnt[33], dut.cpu.perf.cnt[24],
-             dut.cpu.perf.cnt[37], dut.cpu.perf.cnt[38], dut.cpu.perf.cnt[26]);
+        $fatal(1, "VRAM path counters disagree: reads general %0d vs beats %0d, stores slow %0d vs beats %0d",
+               dut.cpu.perf.cnt[33], dut.cpu.perf.cnt[24],
+               dut.cpu.perf.cnt[38], dut.cpu.perf.cnt[26]);
+    $display("PASS: VRAM reads general %0d vs beats %0d, stores slow %0d vs beats %0d",
+             dut.cpu.perf.cnt[33], dut.cpu.perf.cnt[24],
+             dut.cpu.perf.cnt[38], dut.cpu.perf.cnt[26]);
 `ifdef VRAM_DDR3
     // every VRAM read beat is a hit, a fill, or acked by a prefetch's fill
     // beat (page 5; prefetches are no longer counted, so allow 2% for them)

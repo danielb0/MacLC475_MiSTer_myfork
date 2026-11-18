@@ -78,6 +78,16 @@ module ap68040_biu
 	output logic              ravec,
 	output logic              rtci,
 	output logic  [1:0]       errbeat,
+	// the same terminations in the clock of their TA (combinational from the
+	// pins), for a client that takes them a clock sooner than done/rvalid;
+	// done_e also carries the registered done of a dropped retry
+	output logic [NC-1:0]     done_e,
+	output logic              rvalid_e,
+	output logic [$clog2(NC)-1:0] rclient_e,
+	output logic [31:0]       rdata_e,
+	output logic  [1:0]       rbeat_e,
+	output logic              ravec_e,
+	output logic              rtci_e,
 	output logic              idle,     // no transaction latched or running
 	output logic              own,      // we are the bus master (BB ours)
 
@@ -191,6 +201,21 @@ wire        keep_bus = !bg_n || locked;
 // ownership: already ours and kept, or BG asserted and the bus free
 wire        can_own  = (owner && keep_bus) || (!bg_n && bb_n_i);
 
+// same-clock terminations (done_e and friends): what the registered outputs
+// will say a clock from now, for a transfer TA ends in this clock
+logic [NC-1:0] done_drop;   // the registered done of a dropped retry
+wire  t_now = bclk_en && (st == S_DATA) && t_ok;
+always_comb begin
+	done_e = done_drop;
+	if (t_now && (!is_line || beat == 2'd3)) done_e[cur_c] = 1'b1;
+end
+assign rvalid_e  = t_now && cur.rd;
+assign rclient_e = cur_c;
+assign rdata_e   = d_i;
+assign rbeat_e   = cur_a32;
+assign ravec_e   = !avec_n;
+assign rtci_e    = (beat == 2'd0 && !inhibited) ? !tci_n : rtci;
+
 logic [9:0] rsto_cnt;
 logic       rsto_pend;   // RESET: RSTO once the transfer in progress ends
 logic       unlock_pend;
@@ -198,6 +223,7 @@ logic       unlock_pend;
 always_ff @(posedge clk) begin
 	gnt    <= '0;
 	done   <= '0;
+	done_drop <= '0;
 	err    <= '0;
 	rvalid <= 1'b0;
 
@@ -270,6 +296,7 @@ always_ff @(posedge clk) begin
 				if (st == S_RETRY && drop[cur_c]) begin
 					st <= S_IDLE;
 					done[cur_c] <= 1'b1;
+					done_drop[cur_c] <= 1'b1;
 					finish_cycle();
 				end
 				else if (st == S_RETRY && halt) begin

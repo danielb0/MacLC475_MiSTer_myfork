@@ -1738,7 +1738,10 @@ always_ff @(posedge clk) begin
 		//==============================================================
 		E_M_START: begin
 			mt_fault <= 1'b0;
-			pe_mmu[1] <= (mt_op == MT_PFLUSH);
+			// perf (diag): CINV/CPUSH of the whole data cache (CINVA/CPUSHA
+			// DC or BC), not PFLUSH, which the Mac OS never issues
+			pe_mmu[1] <= (mt_op == MT_CINV || mt_op == MT_CPUSH) &&
+			             mt_scope == 2'd3 && mt_caches[0];
 			case (mt_op)
 				MT_PFLUSH, MT_PTEST: begin
 					// both ATCs; by page, or all (N: spare global entries).
