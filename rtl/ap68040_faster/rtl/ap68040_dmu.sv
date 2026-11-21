@@ -65,7 +65,13 @@ module ap68040_dmu
 	// cacheable, and the bus's TCI comes too late to stop a speculative read.
 	parameter bit          PA_IO_SERIAL = 0,
 	parameter logic [31:0] PA_C0_MASK = 32'h0, PA_C0_MATCH = 32'h0,
-	parameter logic [31:0] PA_C1_MASK = 32'h0, PA_C1_MATCH = 32'h0
+	parameter logic [31:0] PA_C1_MASK = 32'h0, PA_C1_MATCH = 32'h0,
+	// A plain store that misses the cache (or with the cache off) goes from
+	// E_W_START straight to E_BUS, deciding there what E_W_PART would
+	// decide a clock later.  (Loads gain nothing from the same: a
+	// noncachable read waits at E_S_START for the older instructions
+	// anyway, dm_older.)
+	parameter bit          FAST_BUS = 1
 )
 (
 	input  logic        clk,
@@ -1648,7 +1654,28 @@ always_ff @(posedge clk) begin
 			e_x    <= m4.x;
 			e_n    <= m4.split ? 3'(5'd16 - {1'b0, m4.r.a[3:0]}) : nbytes(m4.r.msz);
 			bo_err <= 1'b0;
-			e_st   <= E_W_PART;
+			if (FAST_BUS && !m4.split && (m4.r.msz != SZ_Q) && !m4.r.lock &&
+			    !(m4.x.hit && dc_en)) begin
+				// E_W_PART's plain bus write, decided a clock early: a miss
+				// (or the cache off) has no line to push or update
+				bo.line  <= 1'b0;
+				bo.rd    <= 1'b0;
+				bo.tt    <= fc_tt(m4.r.fc);
+				bo.tm    <= fc_tm(m4.r.fc);
+				bo.upa   <= m4.x.upa;
+				bo.ci    <= m4.x.cm[1];
+				bo.lock  <= 1'b0;
+				bo.locke <= m4.r.locke;     // (as E_W_PART: not split)
+				bo.ack   <= m4.r.ack;
+				bo.tln   <= 2'd0;
+				bo_pa    <= m4.x.pa;
+				bo_left  <= nbytes(m4.r.msz);
+				bo_wd    <= lalign(st_data, m4.r.msz);
+				e_ret    <= E_W_DONE;
+				e_st     <= E_BUS;
+			end
+			else
+				e_st   <= E_W_PART;
 		end
 		E_W_PART: begin
 			logic [15:0] be; logic upd;
