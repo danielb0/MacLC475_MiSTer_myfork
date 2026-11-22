@@ -68,7 +68,9 @@ module ap68040_dmu
 	parameter logic [31:0] PA_C1_MASK = 32'h0, PA_C1_MATCH = 32'h0,
 	// A plain store that misses the cache (or with the cache off) goes from
 	// E_W_START straight to E_BUS, deciding there what E_W_PART would
-	// decide a clock later.  (Loads gain nothing from the same: a
+	// decide a clock later, and its bus transfer leaves DC1's lookup good
+	// (e_busq).  A store's last piece answers WB at its TA instead of
+	// through E_W_DONE.  (Loads gain nothing from the first: a
 	// noncachable read waits at E_S_START for the older instructions
 	// anyway, dm_older.)
 	parameter bit          FAST_BUS = 1,
@@ -834,10 +836,13 @@ typedef struct packed {
 	logic  [1:0] tln;
 } bop_t;
 bop_t        bo;
-// a plain operand transfer on the bus (a noncachable read): the engine
-// touches neither the cache nor its read ports
+// the store job E_W_START sent straight to the bus (FAST_BUS: a miss or
+// the cache off) has no line to update or push
+logic        e_wq;
+// a plain operand transfer on the bus (a noncachable read, or such a
+// store): the engine touches neither the cache nor its read ports
 wire  e_busq  = (e_st == E_BUS || e_st == E_BUS_W) && !bo.line && !steal &&
-                (e_ret == E_S_BUSD);
+                (e_ret == E_S_BUSD || (e_ret == E_W_DONE && e_wq));
 // engine states that write no data, tag or valid bit: the RAM outputs a
 // lookup captured stay good (a fast split read; the RAM re-reads the held
 // DC1 set after its stolen read, steal_q)
@@ -1113,7 +1118,7 @@ always_ff @(posedge clk) begin
 		// dirty bits have their power-up values from their initial blocks,
 		// and CINVA clears them when the software asks)
 		e_st <= E_IDLE; e_ret <= E_IDLE; e_sret <= E_IDLE; e_wret <= E_IDLE;
-		e_dc2_done <= 1'b0; e_wst_done <= 1'b0;
+		e_dc2_done <= 1'b0; e_wst_done <= 1'b0; e_wq <= 1'b0;
 		e_ldata <= '0; e_flt <= 1'b0; e_faddr <= '0; e_fssw <= '0;
 		e_part <= 1'b0; e_x <= '0; e_va <= '0; e_n <= '0; e_acc <= '0; e_fromline <= 1'b0; e_fillhit <= 1'b0;
 		e_breq <= 1'b0;
@@ -1290,6 +1295,7 @@ always_ff @(posedge clk) begin
 		case (e_st)
 		E_IDLE: begin
 			steal <= 1'b0;
+			e_wq  <= 1'b0;
 			// a fetch's walk: its registers loaded whatever the engine takes
 			// up (they are free while it is idle, and every other walk loads
 			// its own), so the job choice -- the kill late in it -- is not
@@ -1715,6 +1721,7 @@ always_ff @(posedge clk) begin
 				bo_pa    <= m4.x.pa;
 				bo_left  <= nbytes(m4.r.msz);
 				bo_wd    <= lalign(st_data, m4.r.msz);
+				e_wq     <= 1'b1;
 				e_ret    <= E_W_DONE;
 				e_st     <= E_BUS;
 			end
@@ -2204,6 +2211,17 @@ always_ff @(posedge clk) begin
 							sim_kchk <= 1'b1;
 						end
 						// synthesis translate_on
+					end
+					else if (FAST_BUS && bo_left == bo_pn && !bo.rd &&
+					         e_ret == E_W_DONE && !m4.split &&
+					         !(pbe_r && pv_for == 2'd1)) begin
+						// a store's last piece, without error: what
+						// E_W_DONE would do, a clock sooner (a split
+						// store, or a push's TEA, still goes there)
+						st_rdy_r   <= 1'b1;
+						st_fault_r <= 1'b0;
+						e_wst_done <= 1'b1;
+						e_st       <= E_IDLE;
 					end
 					else if (bo_left == bo_pn) e_st <= e_ret;
 					else e_breq <= 1'b1;
