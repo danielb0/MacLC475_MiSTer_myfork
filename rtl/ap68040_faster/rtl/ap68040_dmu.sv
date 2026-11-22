@@ -71,7 +71,13 @@ module ap68040_dmu
 	// decide a clock later.  (Loads gain nothing from the same: a
 	// noncachable read waits at E_S_START for the older instructions
 	// anyway, dm_older.)
-	parameter bit          FAST_BUS = 1
+	parameter bit          FAST_BUS = 1,
+	// A physical window whose reads have no side effects (a frame buffer
+	// that PA_IO_SERIAL makes serialized): a plain read there goes from
+	// E_S_START straight to E_BUS without waiting for the older
+	// instructions.  Should one of them discard it, nothing was disturbed.
+	// Mask 0: off.
+	parameter logic [31:0] PA_NS_MASK = 32'h0, PA_NS_MATCH = 32'h0
 )
 (
 	input  logic        clk,
@@ -742,6 +748,13 @@ function automatic logic st_line(input mrec_t m, input logic [27:0] l);
 	          (m.x.pa[11:4] == l[7:0] || (m.split && m.x1.pa[11:4] == l[7:0]));
 endfunction
 wire hz = st_line(m3, m2_line) || st_line(m4, m2_line);
+// DC2's load is a plain read of the no-side-effect window (PA_NS_*): what
+// E_S_ACT would send to the bus a clock later, older stores (EX, WB) gone
+wire ns_rd = (PA_NS_MASK != 32'h0) && FAST_BUS && (m2.r.mem == M_LD) && !m2.split && !m2.sfast &&
+             m2.x.ok && !m2.x.flt && m2.x.cm[1] && !(m2.x.hit && dc_en) &&
+             !m2.r.lock && (m2.r.ack == 2'd0) && (m2.r.msz != SZ_Q) && !m2.r.pastc &&
+             ((m2.x.pa & PA_NS_MASK) == PA_NS_MATCH) &&
+             !(m3.r.v && m3.r.mem != M_LD) && !(m4.r.v && m4.r.mem != M_LD);
 // the fast load (never split) waits only for a store whose bytes it reads:
 // a plain store within one line is compared by bytes, anything else (RMW,
 // split, MOVE16) by the line
@@ -1333,10 +1346,27 @@ always_ff @(posedge clk) begin
 				st_set <= m2.r.a[CSH:4] + 1'd1;
 				e_st   <= E_SP_W;
 			end
+			else if (ns_rd) begin
+				// E_S_ACT's bus read, a clock sooner (PA_NS_*)
+				bo.line  <= 1'b0;
+				bo.rd    <= 1'b1;
+				bo.tt    <= fc_tt(m2.r.fc);
+				bo.tm    <= fc_tm(m2.r.fc);
+				bo.upa   <= m2.x.upa;
+				bo.ci    <= 1'b1;
+				bo.lock  <= 1'b0;
+				bo.locke <= 1'b0;
+				bo.ack   <= 2'd0;
+				bo.tln   <= 2'd0;
+				bo_pa    <= m2.x.pa;
+				bo_left  <= nbytes(m2.r.msz);
+				e_ret    <= E_S_BUSD;
+				e_st     <= E_BUS;
+			end
 			else
 				e_st   <= m2.x.ok ? E_S_ACT : E_S_XL;
 		end
-		E_SP_W: e_st <= E_SP_2;         // the RAMs register the stolen address
+		E_SP_W: e_st <= E_SP_2;        // the RAMs register the stolen address
 		E_SP_3: begin
 			logic [2:0] n0;
 			n0 = 3'(5'd16 - {1'b0, m2.r.a[3:0]});
@@ -1589,7 +1619,15 @@ always_ff @(posedge clk) begin
 			// the bus read finished
 			// (an acknowledge cycle's TEA is no access error: IACK takes the
 			// spurious vector, BKPT the illegal instruction exception)
-			if (bo_err && (m2.r.ack == 2'd0)) begin
+			if (e_kill) begin
+				// the uop was discarded while its read was on the bus (a
+				// PA_NS_* read goes before the older instructions are
+				// done): DC2 may hold a newer uop by now, so leave m2 alone
+				steal <= 1'b0;
+				e_job <= 1'b0;
+				e_st  <= E_IDLE;
+			end
+			else if (bo_err && (m2.r.ack == 2'd0)) begin
 				// FA is the operand's first byte even when a later part
 				// faulted (MA marks an ATC fault only, 8.4.6.2)
 				e_flt   <= 1'b1;
@@ -1609,6 +1647,12 @@ always_ff @(posedge clk) begin
 			end
 		end
 		E_S_NEXT: begin
+			// synthesis translate_off
+			if (e_kill && m2.r.v) begin
+				$display("FAIL: DMU: a discarded job wrote a newer uop's translation");
+				sim_kchk <= 1'b1;
+			end
+			// synthesis translate_on
 			if (m2.split && !e_part) begin
 				m2.x   <= e_x;                 // part 0, for WB
 				e_part <= 1'b1;
@@ -2110,7 +2154,7 @@ always_ff @(posedge clk) begin
 				e_st   <= e_ret;
 			end
 			else if (b_done && bo_ingnt) begin
-				if (bo.line && bo.rd && e_ret == E_S_BUSD &&
+				if (bo.line && bo.rd && e_ret == E_S_BUSD && !e_kill &&
 				    m2.r.msz == SZ_Q && !(pbe_r && pv_for == 2'd0)) begin
 					// a MOVE16 source line read from the bus answers DC2
 					// at its last beat's TA (that beat comes with done),
@@ -2131,7 +2175,7 @@ always_ff @(posedge clk) begin
 					if (!bo.rd) bo_wd <= bo_wd << (8 * bo_pn);
 					bo_pa   <= bo_pa + {29'd0, bo_pn};
 					bo_left <= bo_left - bo_pn;
-					if (bo_left == bo_pn && bo.rd && e_ret == E_S_BUSD &&
+					if (bo_left == bo_pn && bo.rd && e_ret == E_S_BUSD && !e_kill &&
 					    m2.r.ack == 2'd0 && m2.r.msz != SZ_Q && !m2.split &&
 					    !(pbe_r && pv_for == 2'd0)) begin
 						// a plain single-part read (the uncached VRAM and

@@ -100,7 +100,11 @@ ap68040 #(
 	// speed, and was removed with its direct VRAM read paths)
 	.PA_IO_SERIAL(1),
 	.PA_C0_MASK(32'hC000_0000), .PA_C0_MATCH(32'h0000_0000),
-	.PA_C1_MASK(32'hF000_0000), .PA_C1_MATCH(32'h4000_0000)
+	.PA_C1_MASK(32'hF000_0000), .PA_C1_MATCH(32'h4000_0000),
+	// ... except the frame buffer ($F9000000-$F91FFFFF): reading it has no
+	// side effects, so a plain read there need not wait for older
+	// instructions to complete (one clock a VRAM read)
+	.PA_NS_MASK(32'hFFE0_0000), .PA_NS_MATCH(32'hF900_0000)
 ) cpu (
 	.clk(clk),
 	.bclk_en(1'b1),
