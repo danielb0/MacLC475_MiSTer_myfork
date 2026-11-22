@@ -36,6 +36,7 @@ module wombat_store_buffer
 	input       [2:0] s_fc,
 	output            s_ack,
 	output     [31:0] s_rdata,
+	input             s_line_more,  // a line read with beats after this one
 
 	// Platform side: the existing post-cache bus contract.
 	output            m_req,
@@ -48,6 +49,7 @@ module wombat_store_buffer
 	input             m_ack,
 	input      [31:0] m_rdata,
 	input             m_err,
+	output            m_line_more,
 
 	// High until every accepted buffered write has reached platform ack.
 	output            pending
@@ -138,6 +140,7 @@ assign s_ack   = s_write ? (buffer_req ? (accept_ack | (push & s_posted)) :
 assign s_rdata = m_rdata;
 
 assign m_req   = drain_active ? 1'b1     : direct_request;
+assign m_line_more = !drain_active && s_req && !s_write && s_line_more;
 assign m_write = drain_active ? 1'b1     : s_write;
 assign m_instr = drain_active ? q0_instr : s_instr;
 assign m_size  = drain_active ? q0_size  : s_size;
@@ -306,8 +309,13 @@ always @(posedge clk) begin
 		else if (!direct_active && push && !m_ack && !m_err)
 			drain_active <= 1;
 
+		// A line read keeps the bus between its beats: the next beat's
+		// request follows its acknowledge with nothing queued that could
+		// come between, so the platform may acknowledge it in the very next
+		// clock (lc475's retained-line burst) instead of one clock later.
 		if (direct_active) begin
-			if (m_ack || m_err) direct_active <= 0;
+			if (m_err) direct_active <= 0;
+			else if (m_ack) direct_active <= !s_write && s_line_more;
 		end
 		else if (!drain_active && direct_request && !m_ack && !m_err)
 			direct_active <= 1;

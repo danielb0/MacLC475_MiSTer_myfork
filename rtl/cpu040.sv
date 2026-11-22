@@ -36,6 +36,7 @@ module cpu040
 	output  [2:0] bus_fc,
 	input         bus_ack,
 	input  [31:0] bus_rdata,
+	output        bus_line_more,  // a line read with beats after this one
 
 	output        walker_req,
 	output        walker_we,
@@ -84,7 +85,7 @@ wire [31:0] c_di;
 wire        c_ta_n, c_tea_n, c_tci_n, c_avec_n;
 wire        c_lock_n;
 // the adapter's side of the optional store buffer
-wire        cpu_bus_req, cpu_bus_write, cpu_bus_instr, cpu_bus_ack;
+wire        cpu_bus_req, cpu_bus_write, cpu_bus_instr, cpu_bus_ack, cpu_line_more;
 wire  [1:0] cpu_bus_size;
 wire [31:0] cpu_bus_addr, cpu_bus_wdata, cpu_bus_rdata;
 wire  [2:0] cpu_bus_fc;
@@ -135,7 +136,8 @@ bus040 bus_adapter (
     .bus_req(cpu_bus_req), .bus_write(cpu_bus_write), .bus_instr(cpu_bus_instr),
     .bus_size(cpu_bus_size), .bus_addr(cpu_bus_addr), .bus_wdata(cpu_bus_wdata),
     .bus_fc(cpu_bus_fc), .bus_ack(cpu_bus_ack), .bus_rdata(cpu_bus_rdata),
-    .berr(berr), .dbg_stall_flt(dbg_stall_flt), .busy(debug_busy)
+    .berr(berr), .dbg_stall_flt(dbg_stall_flt), .busy(debug_busy),
+    .line_more(cpu_line_more)
 );
 
 generate if (AP040_STORE_BUFFER != 0) begin : g_store_buffer
@@ -150,10 +152,10 @@ generate if (AP040_STORE_BUFFER != 0) begin : g_store_buffer
 		.s_req(cpu_bus_req), .s_posted(1'b0), .s_write(cpu_bus_write),
 		.s_instr(cpu_bus_instr), .s_size(cpu_bus_size),
 		.s_addr(cpu_bus_addr), .s_wdata(cpu_bus_wdata), .s_fc(cpu_bus_fc),
-		.s_ack(cpu_bus_ack), .s_rdata(cpu_bus_rdata),
+		.s_ack(cpu_bus_ack), .s_rdata(cpu_bus_rdata), .s_line_more(cpu_line_more),
 		.m_req(bus_req), .m_write(bus_write), .m_instr(bus_instr),
 		.m_size(bus_size), .m_addr(bus_addr), .m_wdata(bus_wdata), .m_fc(bus_fc),
-		.m_ack(bus_ack), .m_rdata(bus_rdata), .m_err(berr),
+		.m_ack(bus_ack), .m_rdata(bus_rdata), .m_err(berr), .m_line_more(bus_line_more),
 		.pending()
 	);
 end else begin : g_no_store_buffer
@@ -166,6 +168,7 @@ end else begin : g_no_store_buffer
 	assign bus_fc        = cpu_bus_fc;
 	assign cpu_bus_ack   = bus_ack;
 	assign cpu_bus_rdata = bus_rdata;
+	assign bus_line_more = cpu_bus_req && !cpu_bus_write && cpu_line_more;
 end endgenerate
 
 //----------------------------------------------------------------------------
