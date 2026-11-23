@@ -868,6 +868,9 @@ logic [CSB-1:0] f_set;
 // one and not the other are given the other's set)
 always_comb ld_ra = lv_ra;
 logic  [1:0] f_way;
+// a load's fill requested from E_S_ACT: its victim steps (E_FILL, E_FILLW,
+// E_FILL_W's) run while the line is on the bus; 0 when done
+logic  [1:0] fv;
 logic [CTW-1:0] f_tag;
 logic        pv_v;                // push buffer holds a dirty line
 logic [127:0] pv_line;
@@ -1125,7 +1128,7 @@ always_ff @(posedge clk) begin
 		bo <= '0; bo_wd <= '0; bo_line <= '0; bo_err <= 1'b0; bo_rd <= '0;
 		bo_avec <= 1'b0; bo_tci <= 1'b0; bo_left <= '0; bo_pn <= '0; bo_pa <= '0;
 		steal <= 1'b0; st_la <= '0; st_fc2 <= 1'b0; st_set <= '0;
-		f_set <= '0; f_way <= '0; f_tag <= '0;
+		f_set <= '0; f_way <= '0; f_tag <= '0; fv <= 2'd0;
 		pv_v <= 1'b0; pv_line <= '0; pv_lpa <= '0; pv_dirty <= 1'b0; pv_tln <= '0; pv_lock <= 1'b0;
 		pv_for <= 2'd0; pbe_r <= 1'b0; pbe_a <= '0;
 		mv_line <= '0;
@@ -1561,7 +1564,36 @@ always_ff @(posedge clk) begin
 				f_tag  <= e_x.pa[31:CSH+1];
 				f_way  <= victim(lve_q, rrc);
 				e_sret <= E_S_XL;
-				e_st   <= E_FILL;
+				if (!bo_cancel) begin
+					// the line read goes to the bus now, what E_FILL_W and
+					// E_BUS would send 4 clocks later.  The line collects
+					// in bo_line and needs no way until E_FILL_INS, so the
+					// victim's steps (fv) run during the burst; E_FILL_INS
+					// waits for them.
+					fv       <= 2'd1;
+					bo.line  <= 1'b1;
+					bo.rd    <= 1'b1;
+					bo.tt    <= TT_NORMAL;
+					bo.tm    <= m2.r.smode ? TM_SDATA : TM_UDATA;
+					bo.upa   <= e_x.upa;
+					bo.ci    <= 1'b0;
+					bo.lock  <= 1'b0;
+					bo.locke <= 1'b0;
+					bo.ack   <= 2'd0;
+					bo.tln   <= victim(lve_q, rrc);   // (TLN: not wired out)
+					bo_pa    <= {e_x.pa[31:CSH+1], e_va[CSH:4], e_va[3:2], 2'b00};
+					bo_left  <= 3'd4;
+					bo_err   <= 1'b0;
+					bo_got   <= 4'd0;
+					bo_tci   <= 1'b0;
+					bo_avec  <= 1'b0;
+					bo_rd    <= '0;
+					bo_ingnt <= 1'b0;
+					e_ret    <= E_FILL_INS;
+					e_breq   <= 1'b1;
+					e_st     <= E_BUS_W;
+				end
+				else e_st <= E_FILL;
 			end
 			else if (rd) begin
 				// cache inhibited, no-allocate miss, locked, MOVE16 miss,
@@ -2002,7 +2034,7 @@ always_ff @(posedge clk) begin
 			e_ret   <= E_FILL_INS;
 			e_st    <= E_BUS;
 		end
-		E_FILL_INS: begin
+		E_FILL_INS: if (fv == 2'd0) begin   // (the victim's steps done)
 			if (!bo_err && !bo_tci) begin
 				dw      <= 1'b1;
 				dw_set  <= f_set;
@@ -2179,7 +2211,7 @@ always_ff @(posedge clk) begin
 				end
 				else if (bo.line && bo.rd && e_ret == E_FILL_INS && !e_kill &&
 				         m2.r.mem == M_LD && e_sret == E_S_XL && !m2.split &&
-				         !pv_v && !bo_err && !bo_tci &&
+				         fv == 2'd0 && !pv_v && !bo_err && !bo_tci &&
 				         !(b_rvalid && b_rbeat == bo_pa[3:2] && b_rtci) &&
 				         !(pbe_r && pv_for == 2'd0)) begin
 					// a load's own fill with no dirty victim installs the
@@ -2534,6 +2566,42 @@ always_ff @(posedge clk) begin
 
 		default: e_st <= E_IDLE;
 		endcase
+
+		// the victim's steps of a fill requested from E_S_ACT, beside the
+		// engine's bus wait: E_FILL's (skip a way a store still holds,
+		// then read the set through the stolen ports), E_FILLW's (the RAMs
+		// register it) and E_FILL_W's (a dirty victim into the push buffer,
+		// the way invalidated).  The engine writes no valid bits, tags or
+		// steal meanwhile (E_BUS_W; E_FILL_INS waits for fv), and DC1 is
+		// held (dm_hold1: the engine is busy on a line).
+		if (!sn_frz && fv != 2'd0) begin
+			case (fv)
+			2'd1:
+				if (store_holds(f_set, f_way, m3, m4))
+					f_way <= f_way + 2'd1;  // that line belongs to a store
+				else begin
+					steal  <= 1'b1;
+					st_set <= f_set;
+					tset_b <= f_set;
+					fv     <= 2'd2;
+				end
+			2'd2: fv <= 2'd3;
+			default: begin
+				if (lve_q[f_way] && ld_q[f_way]) begin  // (ld_ra, lv_ra: f_set)
+					pv_v     <= 1'b1;
+					pv_line  <= dq_w;
+					pv_lpa   <= {tq_b[f_way], f_set};
+					pv_dirty <= 1'b1;
+					pv_tln   <= f_way;
+					pv_lock  <= 1'b0;
+					pv_for   <= 2'd0;
+				end
+				vp_set = f_set; vp_wm[f_way] = 1'b1;
+				vp_lwe = 1'b1; vp_lv = 1'b0; vp_dwe = 1'b1; vp_dv = 1'b0;
+				fv <= 2'd0;
+			end
+			endcase
+		end
 
 		if ((e_st == E_SP_W || e_st == E_SP_2) && dw && dw_set == st_set) sp_dw <= 1'b1;
 
