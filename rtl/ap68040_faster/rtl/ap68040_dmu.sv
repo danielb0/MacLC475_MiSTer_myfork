@@ -67,8 +67,8 @@ module ap68040_dmu
 	parameter logic [31:0] PA_C0_MASK = 32'h0, PA_C0_MATCH = 32'h0,
 	parameter logic [31:0] PA_C1_MASK = 32'h0, PA_C1_MATCH = 32'h0,
 	// A plain store that misses the cache (or with the cache off) goes from
-	// E_W_START straight to E_BUS, deciding there what E_W_PART would
-	// decide a clock later, and its bus transfer leaves DC1's lookup good
+	// E_IDLE straight to E_BUS, deciding there what E_W_PART would decide
+	// two clocks later, and its bus transfer leaves DC1's lookup good
 	// (e_busq).  A store's last piece answers WB at its TA instead of
 	// through E_W_DONE.  (Loads gain nothing from the first: a
 	// noncachable read waits at E_S_START for the older instructions
@@ -692,7 +692,6 @@ end
 // (the engine's state for the bench's profile: a parameterized module's
 // enum items are not reachable through the hierarchy in Verilator)
 wire sim_es_s  = (e_st == E_S_START);
-wire sim_es_w  = (e_st == E_W_START);
 wire sim_es_m  = (e_st == E_M_START);
 wire sim_es_tw = (e_st == E_TW_START);
 wire sim_es_i  = (e_st == E_IDLE);
@@ -842,12 +841,12 @@ typedef struct packed {
 	logic  [1:0] tln;
 } bop_t;
 bop_t        bo;
-// the store job E_W_START sent straight to the bus (FAST_BUS: a miss or
+// the store job E_IDLE sent straight to the bus (FAST_BUS: a miss or
 // the cache off) has no line to update or push
 logic        e_wq;
 // a plain operand transfer on the bus (a noncachable read, or such a
 // store): the engine touches neither the cache nor its read ports
-// (A line write of mv_line, the MOVE16 store E_W_START or m16_pre sent
+// (A line write of mv_line, the MOVE16 store E_IDLE or m16_pre sent
 // straight to the bus, touches neither either: its data is in bo_line.)
 wire  e_busq  = (e_st == E_BUS || e_st == E_BUS_W) && !steal &&
                 ((!bo.line && (e_ret == E_S_BUSD || (e_ret == E_W_DONE && e_wq))) ||
@@ -1012,6 +1011,10 @@ wire ex_st    = m3.r.v && (m3.r.mem != M_LD);
 wire dc2_slow = m2.r.v && !fast_now && !fast_wait && !(st_simple && !e_job) && !e_dc2_done && !e_job &&
                 !ex_st;
 wire wb_slow  = wb_st && !wb_fast && !wb_fs && !wfs_p1 && !e_wst_done && !m4.pre;
+// synthesis translate_off
+// (the bench's profile: a WB store job starts)
+wire sim_es_w = (e_st == E_IDLE) && !sn_frz && !wfs_p1 && !(mt_v && !mt_done) && wb_slow;
+// synthesis translate_on
 // An early MOVE16 store: a MOVE16's store half to the side-effect-free
 // frame buffer window (PA_NS) starts its line write while still in DC2,
 // rather than from WB, which it would reach 2-3 clocks later.  Allowed
@@ -1388,7 +1391,42 @@ always_ff @(posedge clk) begin
 			else if (mt_v && !mt_done)
 				e_st <= E_M_START;
 			else if (wb_slow) begin
-				e_st <= E_W_START;
+				// the WB store job's setup, here rather than a clock later in
+				// a state of its own (the store waits in WB, m4 and st_data
+				// held): a plain bus write goes straight to E_BUS, the rest
+				// to E_W_PART
+				e_part <= 1'b0;
+				e_acc  <= lalign(st_data, m4.r.msz);
+				e_va   <= m4.r.a;
+				e_x    <= m4.x;
+				e_n    <= m4.split ? 3'(5'd16 - {1'b0, m4.r.a[3:0]}) : nbytes(m4.r.msz);
+				bo_err <= 1'b0;
+				if (FAST_BUS && !m4.split && !m4.r.lock && !(m4.x.hit && dc_en)) begin
+					// E_W_PART's plain bus write, decided two clocks early: a
+					// miss (or the cache off) has no line to push or update.
+					// A MOVE16 store (SZ_Q) goes the same way as a line write
+					// of mv_line, which its source read filled before the
+					// store reached WB.
+					bo.line  <= (m4.r.msz == SZ_Q);
+					bo.rd    <= 1'b0;
+					bo.tt    <= (m4.r.msz == SZ_Q) ? TT_MOVE16 : fc_tt(m4.r.fc);
+					bo.tm    <= fc_tm(m4.r.fc);
+					bo.upa   <= m4.x.upa;
+					bo.ci    <= m4.x.cm[1];
+					bo.lock  <= 1'b0;
+					bo.locke <= m4.r.locke;     // (as E_W_PART: not split)
+					bo.ack   <= m4.r.ack;
+					bo.tln   <= 2'd0;
+					bo_pa    <= (m4.r.msz == SZ_Q) ? {m4.x.pa[31:4], 4'd0} : m4.x.pa;
+					bo_left  <= (m4.r.msz == SZ_Q) ? 3'd4 : nbytes(m4.r.msz);
+					bo_wd    <= lalign(st_data, m4.r.msz);
+					bo_line  <= mv_line;
+					e_wq     <= 1'b1;
+					e_ret    <= E_W_DONE;
+					e_st     <= E_BUS;
+				end
+				else
+					e_st   <= E_W_PART;
 				if (m4.x.ok && !m4.x.flt && m4.x.pa[31:21] == 11'b1111_1001_000)
 					pe_vram[5:4] <= {m4.split, 1'b1};
 			end
@@ -1853,39 +1891,7 @@ always_ff @(posedge clk) begin
 		// WB store through the engine (write-through, cache-inhibited,
 		// locked, split, MOVE16)
 		//==============================================================
-		E_W_START: begin
-			e_part <= 1'b0;
-			e_acc  <= lalign(st_data, m4.r.msz);
-			e_va   <= m4.r.a;
-			e_x    <= m4.x;
-			e_n    <= m4.split ? 3'(5'd16 - {1'b0, m4.r.a[3:0]}) : nbytes(m4.r.msz);
-			bo_err <= 1'b0;
-			if (FAST_BUS && !m4.split && !m4.r.lock && !(m4.x.hit && dc_en)) begin
-				// E_W_PART's plain bus write, decided a clock early: a miss
-				// (or the cache off) has no line to push or update. A MOVE16
-				// store (SZ_Q) goes the same way as a line write of mv_line,
-				// which its source read filled before the store reached WB.
-				bo.line  <= (m4.r.msz == SZ_Q);
-				bo.rd    <= 1'b0;
-				bo.tt    <= (m4.r.msz == SZ_Q) ? TT_MOVE16 : fc_tt(m4.r.fc);
-				bo.tm    <= fc_tm(m4.r.fc);
-				bo.upa   <= m4.x.upa;
-				bo.ci    <= m4.x.cm[1];
-				bo.lock  <= 1'b0;
-				bo.locke <= m4.r.locke;     // (as E_W_PART: not split)
-				bo.ack   <= m4.r.ack;
-				bo.tln   <= 2'd0;
-				bo_pa    <= (m4.r.msz == SZ_Q) ? {m4.x.pa[31:4], 4'd0} : m4.x.pa;
-				bo_left  <= (m4.r.msz == SZ_Q) ? 3'd4 : nbytes(m4.r.msz);
-				bo_wd    <= lalign(st_data, m4.r.msz);
-				bo_line  <= mv_line;
-				e_wq     <= 1'b1;
-				e_ret    <= E_W_DONE;
-				e_st     <= E_BUS;
-			end
-			else
-				e_st   <= E_W_PART;
-		end
+		// (E_W_START is no longer entered: E_IDLE sets up the WB store job)
 		E_W_PART: begin
 			logic [15:0] be; logic upd;
 			be  = bmask(e_va[3:0], e_n);
