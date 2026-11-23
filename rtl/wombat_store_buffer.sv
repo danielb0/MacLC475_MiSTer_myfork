@@ -37,6 +37,7 @@ module wombat_store_buffer
 	output            s_ack,
 	output     [31:0] s_rdata,
 	input             s_line_more,  // a line read with beats after this one
+	input             s_xfer,       // the request is past the CPU's TS clock
 
 	// Platform side: the existing post-cache bus contract.
 	output            m_req,
@@ -134,7 +135,13 @@ assign pending = (count != 0);
 // which is the CPU's TS clock: TA is not sampled there.  direct_early holds
 // that acknowledge for the next clock and keeps the request from being
 // presented twice; direct_active is not set then.
-assign s_ack   = s_write ? (buffer_req ? (accept_ack | (push & s_posted)) :
+// A write captured past the CPU's TS clock (s_xfer: a line write's later
+// beats, or any write the full queue held back) is acknowledged in its
+// capture clock: TA is sampled there, and the beat after it is a new
+// transfer, so the held-request guard is not needed.  A line write to
+// VRAM or RAM then goes 2-1-1-1 instead of 2-2-2-2.
+wire   now_ack = push & (s_posted | s_xfer);
+assign s_ack   = s_write ? (buffer_req ? (accept_ack | now_ack) :
                             (direct_active ? m_ack : direct_early)) :
                  (direct_active ? m_ack : 1'b0);
 assign s_rdata = m_rdata;
@@ -166,7 +173,7 @@ always @(posedge clk) begin
 		direct_early <= direct_request && s_write && vram_window && m_ack && !direct_active;
 		// a posted write was acknowledged in its capture cycle; the
 		// requester has moved on, so no held-request guard is needed
-		if (push) accept_ack <= !s_posted;
+		if (push) accept_ack <= !now_ack;
 
         // Four ordered slots; preserve the one-queued-write read bypass rule.
         case ({push,pop})

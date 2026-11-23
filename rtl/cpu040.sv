@@ -153,6 +153,7 @@ generate if (AP040_STORE_BUFFER != 0) begin : g_store_buffer
 		.s_instr(cpu_bus_instr), .s_size(cpu_bus_size),
 		.s_addr(cpu_bus_addr), .s_wdata(cpu_bus_wdata), .s_fc(cpu_bus_fc),
 		.s_ack(cpu_bus_ack), .s_rdata(cpu_bus_rdata), .s_line_more(cpu_line_more),
+		.s_xfer(debug_busy),
 		.m_req(bus_req), .m_write(bus_write), .m_instr(bus_instr),
 		.m_size(bus_size), .m_addr(bus_addr), .m_wdata(bus_wdata), .m_fc(bus_fc),
 		.m_ack(bus_ack), .m_rdata(bus_rdata), .m_err(berr), .m_line_more(bus_line_more),
