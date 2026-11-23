@@ -781,9 +781,12 @@ wire fast_now = m2.r.v && m2.fast && !hzf && !(dw && !dwp && dw_set == m2.r.a[CS
 wire [31:0] fast_data = take({dq2, 64'd0}, {2'd0, m2.r.a[1:0]}, nbytes(m2.r.msz));
 
 // a store with its translation known needs nothing from DC2 unless it must
-// allocate (copyback miss), is split, or is a MOVE16 destination
+// allocate (copyback miss), is split, or is a MOVE16 destination that hits
+// (the engine invalidates that line; a MOVE16 store that misses, or with
+// the data cache off, has nothing to do there -- E_S_ACT would trust this
+// same lookup -- and a frame buffer destination never hits)
 wire st_simple = m2.r.v && (m2.r.mem == M_ST) && m2.x.ok && !m2.x.flt && !m2.split &&
-                 (m2.r.msz != SZ_Q) &&
+                 (m2.r.msz != SZ_Q || !m2.x.hit || !dc_en) &&
                  !(dc_en && m2.x.cm == 2'b01 && !m2.x.hit && !m2.r.noalloc && !m2.r.lock);
 
 //--------------------------------------------------------------------------
