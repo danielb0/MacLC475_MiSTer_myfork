@@ -2177,6 +2177,54 @@ always_ff @(posedge clk) begin
 					steal      <= 1'b0;
 					e_st       <= E_IDLE;
 				end
+				else if (bo.line && bo.rd && e_ret == E_FILL_INS && !e_kill &&
+				         m2.r.mem == M_LD && e_sret == E_S_XL && !m2.split &&
+				         !pv_v && !bo_err && !bo_tci &&
+				         !(b_rvalid && b_rbeat == bo_pa[3:2] && b_rtci) &&
+				         !(pbe_r && pv_for == 2'd0)) begin
+					// a load's own fill with no dirty victim installs the
+					// line and answers DC2 at its last beat's TA, the
+					// operand from the line just read: what E_FILL_INS,
+					// E_S_ACT (e_fillhit), E_S_NEXT and E_S_DONE would do,
+					// 4 clocks sooner.  The install (dw from bo_line, which
+					// takes this beat now) lands as the engine goes idle;
+					// DC1's stale check on dw covers a lookup of that set.
+					logic [127:0] ln;
+					logic  [31:0] op;
+					xres_t        xf;
+					ln = bo_line;
+					if (b_rvalid) ln[127 - 32*b_rbeat -: 32] = b_rdata;
+					op = (e_acc << (8 * e_n)) | take(ln, e_va[3:0], e_n);
+					xf = e_x;
+					xf.hit = 1'b1;
+					xf.way = f_way;
+					dw      <= 1'b1;
+					dw_set  <= f_set;
+					dw_way  <= f_way;
+					dw_be   <= 16'hFFFF;
+					dw_src  <= 2'd1;
+					tw_b    <= 1'b1;
+					tset_b  <= f_set;
+					tway_b  <= f_way;
+					twd_b   <= f_tag;
+					vp_set = f_set; vp_wm[f_way] = 1'b1;
+					vp_lwe = 1'b1; vp_lv = 1'b1; vp_dwe = 1'b1; vp_dv = 1'b0;
+					rrc        <= rrc + 2'd1;
+					e_acc      <= op;
+					e_ldata    <= op;
+					e_x        <= xf;
+					m2.x       <= xf;
+					e_job      <= 1'b0;
+					e_dc2_done <= 1'b1;
+					steal      <= 1'b0;
+					e_st       <= E_IDLE;
+					// synthesis translate_off
+					if (!m2.r.v) begin
+						$display("FAIL: DMU: a discarded job completed without its kill mark");
+						sim_kchk <= 1'b1;
+					end
+					// synthesis translate_on
+				end
 				else if (bo.line || bo.ack != 2'd0) e_st <= e_ret;
 				else begin
 					if (!bo.rd) bo_wd <= bo_wd << (8 * bo_pn);
