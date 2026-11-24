@@ -786,10 +786,12 @@ wire [31:0] fast_data = take({dq2, 64'd0}, {2'd0, m2.r.a[1:0]}, nbytes(m2.r.msz)
 // allocate (copyback miss), is split, or is a MOVE16 destination that hits
 // (the engine invalidates that line; a MOVE16 store that misses, or with
 // the data cache off, has nothing to do there -- E_S_ACT would trust this
-// same lookup -- and a frame buffer destination never hits)
+// same lookup -- and a frame buffer destination never hits).  A MOVE16
+// store allocates nothing, copyback or not
 wire st_simple = m2.r.v && (m2.r.mem == M_ST) && m2.x.ok && !m2.x.flt && !m2.split &&
                  (m2.r.msz != SZ_Q || !m2.x.hit || !dc_en) &&
-                 !(dc_en && m2.x.cm == 2'b01 && !m2.x.hit && !m2.r.noalloc && !m2.r.lock);
+                 !(dc_en && m2.x.cm == 2'b01 && !m2.x.hit && !m2.r.noalloc && !m2.r.lock &&
+                   m2.r.msz != SZ_Q);
 
 //--------------------------------------------------------------------------
 // engine
@@ -1038,18 +1040,22 @@ wire sim_es_w = (e_st == E_IDLE) && !sn_frz && !wfs_p1 && !(mt_v && !mt_done) &&
                 (wb_slow || (ex_wq && adv_ex));
 // synthesis translate_on
 // An early MOVE16 store: a MOVE16's store half to the side-effect-free
-// frame buffer window (PA_NS) starts its line write while still in DC2,
-// rather than from WB, which it would reach 2-3 clocks later.  Allowed
-// only when its own source read left DC2 with nothing older in EX or WB
-// and without a fault (m16a): then nothing can discard the store -- the
+// frame buffer window (PA_NS), or to cachable memory that the data cache
+// does not hold, starts its line write while still in DC2, rather than
+// from WB, which it would reach 2-3 clocks later (a cachable miss also
+// skips E_S_START's empty job: a MOVE16 store allocates nothing).  The
+// cache cannot take that line before the write ends: nothing older is in
+// flight, and a newer access to it misses and waits for the engine.
+// Allowed only when its own source read left DC2 with nothing older in EX
+// or WB and without a fault (m16a): then nothing can discard the store -- the
 // read cannot fault any more, a MOVE16 uop neither serializes nor
 // redirects, and an interrupt or trace waits for the instruction's end.
 // Its data is mv_line, which that read filled.  WB takes the outcome
 // from pre_done/pre_err (wb_pre), a bus error included.
 wire m16_pre = (PA_NS_MASK != 32'h0) && FAST_BUS && m2.r.v && m2.m16a && !m2.pre &&
                (m2.r.mem == M_ST) && (m2.r.msz == SZ_Q) && !m2.split &&
-               m2.x.ok && !m2.x.flt && m2.x.cm[1] && !(m2.x.hit && dc_en) &&
-               ((m2.x.pa & PA_NS_MASK) == PA_NS_MATCH) &&
+               m2.x.ok && !m2.x.flt && !(m2.x.hit && dc_en) &&
+               (!m2.x.cm[1] || ((m2.x.pa & PA_NS_MASK) == PA_NS_MATCH)) &&
                !m2.r.lock && (m2.r.ack == 2'd0) && !e_pre && !pre_done;
 wire wb_pre  = wb_st && m4.pre && pre_done && !e_wst_done;
 // a MOVE16 source read leaving DC2 answered, without a fault, with
@@ -1061,8 +1067,8 @@ wire m16_ld_out = adv_dc2 && m2.r.v && (m2.r.mem == M_LD) && (m2.r.msz == SZ_Q) 
 wire m16_pre1 = (PA_NS_MASK != 32'h0) && FAST_BUS && adv_dc1 && m1.v && !m1_stale &&
                 (m16_alone || m16_ld_out) &&
                 (m1.mem == M_ST) && (m1.msz == SZ_Q) &&
-                x_dc1.ok && !x_dc1.flt && x_dc1.cm[1] && !(x_dc1.hit && dc_en) &&
-                ((x_dc1.pa & PA_NS_MASK) == PA_NS_MATCH) &&
+                x_dc1.ok && !x_dc1.flt && !(x_dc1.hit && dc_en) &&
+                (!x_dc1.cm[1] || ((x_dc1.pa & PA_NS_MASK) == PA_NS_MATCH)) &&
                 !m1.lock && (m1.ack == 2'd0) && !e_pre && !pre_done;
 // A second slot's load is answered by the fast path or not at all: what
 // would take the engine -- a miss, a noncachable or split access, a table
