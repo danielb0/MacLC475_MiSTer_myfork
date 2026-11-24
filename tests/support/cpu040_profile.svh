@@ -55,11 +55,13 @@ task automatic perf_check(input integer runs);
     // the engine's own counts of frame buffer accesses: no workload here is
     // split, so a store is one beat; a read can be discarded after dispatch.
     // A MOVE16 is one access and four beats each way: a run's 256 from
-    // VRAM read 768 beats more than accesses, its 512 to VRAM write 1536
-    // more (the counters run on across the runs).  Slots 32 and 37 (the
-    // fast reads and posted stores, both gone from the DMU) count RAM data
-    // line reads now: all VRAM accesses take the general path.
-    m16r = 768 * runs;
+    // VRAM, and the one the copy loop's exit discards (a PA_NS read, on the
+    // bus before the branch resolves), read 771 beats more than accesses;
+    // its 512 to VRAM write 1536 more (the counters run on across the
+    // runs).  Slots 32 and 37 (the fast reads and posted stores, both gone
+    // from the DMU) count RAM data line reads now: all VRAM accesses take
+    // the general path.
+    m16r = 771 * runs;
     m16w = 1536 * runs;
     if (dut.cpu.perf.cnt[38] + m16w != dut.cpu.perf.cnt[26] ||
         dut.cpu.perf.cnt[35] != 0 ||

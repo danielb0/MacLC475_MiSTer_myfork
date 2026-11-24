@@ -752,11 +752,12 @@ function automatic logic st_line(input mrec_t m, input logic [27:0] l);
 	          (m.x.pa[11:4] == l[7:0] || (m.split && m.x1.pa[11:4] == l[7:0]));
 endfunction
 wire hz = st_line(m3, m2_line) || st_line(m4, m2_line);
-// DC2's load is a plain read of the no-side-effect window (PA_NS_*): what
-// E_S_ACT would send to the bus a clock later, older stores (EX, WB) gone
+// DC2's load is a plain read of the no-side-effect window (PA_NS_*), or a
+// MOVE16 source line there (it never hits): what E_S_ACT would send to the
+// bus a clock later, older stores (EX, WB) gone
 wire ns_rd = (PA_NS_MASK != 32'h0) && FAST_BUS && (m2.r.mem == M_LD) && !m2.split && !m2.sfast &&
              m2.x.ok && !m2.x.flt && m2.x.cm[1] && !(m2.x.hit && dc_en) &&
-             !m2.r.lock && (m2.r.ack == 2'd0) && (m2.r.msz != SZ_Q) && !m2.r.pastc &&
+             !m2.r.lock && (m2.r.ack == 2'd0) && !m2.r.pastc &&
              ((m2.x.pa & PA_NS_MASK) == PA_NS_MATCH) &&
              !(m3.r.v && m3.r.mem != M_LD) && !(m4.r.v && m4.r.mem != M_LD);
 // the fast load (never split) waits only for a store whose bytes it reads:
@@ -1102,9 +1103,12 @@ logic e_breq;
 logic [5:0] pe_vram;               // perf strobes, dbg_perf[10:5]
 logic [3:0] pe_mmu;                 // perf strobes, dbg_perf[14:11]
 always_comb begin
-	// Scalar request fields are registered before E_BUS; hold until grant.
+	// Request fields are registered before E_BUS; hold until grant.  A line
+	// transfer (a MOVE16's, a fill) asks in E_BUS too, its bo_line loaded
+	// with the rest; a push waits for e_breq (a snoop may cancel it there)
 	b_req  = e_breq || ((e_st == E_BUS) && !sn_frz && !bo_cancel && (!e_exw || exw_ok) &&
-	                    !bo.line && !bo.lock && bo.ack == 2'd0 && bo.tt == TT_NORMAL);
+	                    !(bo.line && bo.tm == TM_PUSH) && !bo.lock && bo.ack == 2'd0 &&
+	                    (bo.tt == TT_NORMAL || bo.tt == TT_MOVE16));
 	b_breq = '0;
 	// acknowledge cycles (TT=3): IACK at $FFFFFFFF, a byte, TM = the level
 	// (7.5.1); the breakpoint acknowledge a byte read at 0, TM = 0 (7.5.2)
@@ -1565,10 +1569,13 @@ always_ff @(posedge clk) begin
 				e_st   <= E_S_RDW;
 			end
 			else if (ns_rd) begin
-				// E_S_ACT's bus read, a clock sooner (PA_NS_*)
-				bo.line  <= 1'b0;
+				// E_S_ACT's bus read, a clock sooner (PA_NS_*); a MOVE16's
+				// line read as E_S_ACT sets it up
+				logic m16;
+				m16 = (m2.r.msz == SZ_Q);
+				bo.line  <= m16;
 				bo.rd    <= 1'b1;
-				bo.tt    <= fc_tt(m2.r.fc);
+				bo.tt    <= m16 ? TT_MOVE16 : fc_tt(m2.r.fc);
 				bo.tm    <= fc_tm(m2.r.fc);
 				bo.upa   <= m2.x.upa;
 				bo.ci    <= 1'b1;
@@ -1576,8 +1583,8 @@ always_ff @(posedge clk) begin
 				bo.locke <= 1'b0;
 				bo.ack   <= 2'd0;
 				bo.tln   <= 2'd0;
-				bo_pa    <= m2.x.pa;
-				bo_left  <= nbytes(m2.r.msz);
+				bo_pa    <= m16 ? {m2.x.pa[31:4], 4'd0} : m2.x.pa;
+				bo_left  <= m16 ? 3'd4 : nbytes(m2.r.msz);
 				e_ret    <= E_S_BUSD;
 				e_st     <= E_BUS;
 			end
