@@ -844,6 +844,9 @@ bop_t        bo;
 // the store job E_IDLE sent straight to the bus (FAST_BUS: a miss or
 // the cache off) has no line to update or push
 logic        e_wq;
+// ... set up as the store left EX (ex_wq): in its first E_BUS clock, the
+// store's first WB clock, its data comes from st_data, not bo_wd
+logic        e_exw;
 // a plain operand transfer on the bus (a noncachable read, or such a
 // store): the engine touches neither the cache nor its read ports
 // (A line write of mv_line, the MOVE16 store E_IDLE or m16_pre sent
@@ -1011,9 +1014,28 @@ wire ex_st    = m3.r.v && (m3.r.mem != M_LD);
 wire dc2_slow = m2.r.v && !fast_now && !fast_wait && !(st_simple && !e_job) && !e_dc2_done && !e_job &&
                 !ex_st;
 wire wb_slow  = wb_st && !wb_fast && !wb_fs && !wfs_p1 && !e_wst_done && !m4.pre;
+// A store leaving EX whose WB job would be E_IDLE's plain bus write (a
+// miss or the cache off, one part, not locked, not MOVE16): its job is
+// set up as it leaves, so the clock it enters WB is E_BUS's request
+// clock, one clock sooner.  Its data is st_data, valid in WB only: the
+// BIU samples a single write's data with the request (b_wdata takes
+// st_data in that clock, bo_wd takes it for the pieces after).  Whether
+// the store reaches WB is not decided here: E_BUS asks only with the
+// store in WB and st_v (no exception, not suppressed); otherwise -- an
+// exception, a kill as it moved -- the job is dropped (e_exw) before it
+// asked.  A store in WB with st_v is not discarded (an interrupt or
+// trace waits for WB to commit), as for the job E_IDLE starts in WB.
+// No DC2 job races it: none starts while a store is in EX (ex_st), and
+// the engine is idle.
+wire ex_wq    = FAST_BUS && m3.r.v && (m3.r.mem == M_ST || m3.r.mem == M_RMW) &&
+                !m3.pre && !m3.split && !m3.r.lock && (m3.r.msz != SZ_Q) &&
+                !(m3.x.hit && dc_en);
+wire exw_ok   = m4.r.v && st_v;          // the store arrived, valid
+wire [31:0] bo_wdx = e_exw ? lalign(st_data, m4.r.msz) : bo_wd;
 // synthesis translate_off
 // (the bench's profile: a WB store job starts)
-wire sim_es_w = (e_st == E_IDLE) && !sn_frz && !wfs_p1 && !(mt_v && !mt_done) && wb_slow;
+wire sim_es_w = (e_st == E_IDLE) && !sn_frz && !wfs_p1 && !(mt_v && !mt_done) &&
+                (wb_slow || (ex_wq && adv_ex));
 // synthesis translate_on
 // An early MOVE16 store: a MOVE16's store half to the side-effect-free
 // frame buffer window (PA_NS) starts its line write while still in DC2,
@@ -1075,7 +1097,7 @@ logic [5:0] pe_vram;               // perf strobes, dbg_perf[10:5]
 logic [3:0] pe_mmu;                 // perf strobes, dbg_perf[14:11]
 always_comb begin
 	// Scalar request fields are registered before E_BUS; hold until grant.
-	b_req  = e_breq || ((e_st == E_BUS) && !sn_frz && !bo_cancel &&
+	b_req  = e_breq || ((e_st == E_BUS) && !sn_frz && !bo_cancel && (!e_exw || exw_ok) &&
 	                    !bo.line && !bo.lock && bo.ack == 2'd0 && bo.tt == TT_NORMAL);
 	b_breq = '0;
 	// acknowledge cycles (TT=3): IACK at $FFFFFFFF, a byte, TM = the level
@@ -1091,8 +1113,8 @@ always_comb begin
 	b_breq.lock  = bo.lock;
 	b_breq.locke = bo.locke && !bo.rd && (bo.line || bo_left == bo_np);
 	b_wdata      = bo.line ? bo_line :
-	               {96'd0, (bo_np == 3'd1) ? {4{bo_wd[31:24]}} :
-	                       (bo_np == 3'd2) ? {2{bo_wd[31:16]}} : bo_wd};
+	               {96'd0, (bo_np == 3'd1) ? {4{bo_wdx[31:24]}} :
+	                       (bo_np == 3'd2) ? {2{bo_wdx[31:16]}} : bo_wdx};
 end
 
 // (a stale lookup waits the clock its set is read again, rather than
@@ -1168,7 +1190,7 @@ always_ff @(posedge clk) begin
 		// dirty bits have their power-up values from their initial blocks,
 		// and CINVA clears them when the software asks)
 		e_st <= E_IDLE; e_ret <= E_IDLE; e_sret <= E_IDLE; e_wret <= E_IDLE;
-		e_dc2_done <= 1'b0; e_wst_done <= 1'b0; e_wq <= 1'b0;
+		e_dc2_done <= 1'b0; e_wst_done <= 1'b0; e_wq <= 1'b0; e_exw <= 1'b0;
 		e_ldata <= '0; e_flt <= 1'b0; e_faddr <= '0; e_fssw <= '0;
 		e_part <= 1'b0; e_x <= '0; e_va <= '0; e_n <= '0; e_acc <= '0; e_fromline <= 1'b0; e_fillhit <= 1'b0;
 		e_breq <= 1'b0;
@@ -1429,6 +1451,32 @@ always_ff @(posedge clk) begin
 					e_st   <= E_W_PART;
 				if (m4.x.ok && !m4.x.flt && m4.x.pa[31:21] == 11'b1111_1001_000)
 					pe_vram[5:4] <= {m4.split, 1'b1};
+			end
+			else if (ex_wq && adv_ex) begin
+				// the same plain bus write, set up as the store leaves EX
+				// (see ex_wq); E_BUS takes its data in WB
+				e_part   <= 1'b0;
+				e_va     <= m3.r.a;
+				e_x      <= m3.x;
+				e_n      <= nbytes(m3.r.msz);
+				bo_err   <= 1'b0;
+				bo.line  <= 1'b0;
+				bo.rd    <= 1'b0;
+				bo.tt    <= fc_tt(m3.r.fc);
+				bo.tm    <= fc_tm(m3.r.fc);
+				bo.upa   <= m3.x.upa;
+				bo.ci    <= m3.x.cm[1];
+				bo.lock  <= 1'b0;
+				bo.locke <= m3.r.locke;
+				bo.ack   <= m3.r.ack;
+				bo.tln   <= 2'd0;
+				bo_pa    <= m3.x.pa;
+				bo_left  <= nbytes(m3.r.msz);
+				e_wq     <= 1'b1;
+				e_exw    <= 1'b1;
+				e_ret    <= E_W_DONE;
+				e_st     <= E_BUS;
+				// (its perf count: in E_BUS, once the store is in WB)
 			end
 			else if ((m16_pre || m16_pre1) && !kill_now) begin
 				// the early MOVE16 store: E_W_START's line write, from DC2
@@ -2286,6 +2334,15 @@ always_ff @(posedge clk) begin
 				e_st      <= e_ret;
 			end
 			else begin
+				if (e_exw) begin
+					// a job set up in EX: the store is in WB now (else
+					// dropped below), its data with it
+					bo_wd <= bo_wdx;
+					e_acc <= bo_wdx;
+					e_exw <= 1'b0;
+					if (exw_ok && e_x.ok && !e_x.flt && e_x.pa[31:21] == 11'b1111_1001_000)
+						pe_vram[5:4] <= 2'b01;
+				end
 				e_breq <= 1'b1;
 				e_st   <= E_BUS_W;
 			end
@@ -2760,6 +2817,16 @@ always_ff @(posedge clk) begin
 		end
 
 		if ((e_st == E_SP_W || e_st == E_SP_2) && dw && dw_set == st_set) sp_dw <= 1'b1;
+
+		// a job set up in EX whose store did not arrive in WB valid (an
+		// exception, suppressed, killed as it moved): dropped unasked,
+		// frozen or not (the store leaves WB at once then)
+		if (e_exw && !exw_ok) begin
+			e_exw  <= 1'b0;
+			e_breq <= 1'b0;
+			e_wq   <= 1'b0;
+			e_st   <= E_IDLE;
+		end
 
 		if (kill_now) begin
 			// a kill comes with the WB uop leaving (or WB empty): every
