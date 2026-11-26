@@ -130,3 +130,29 @@ bus, caches on, copyback); "UM" is the MC68040 User's Manual (M68040UM/AD).
   EXG 3.0 (1 and 2); BFTST 4.0 (3); BTST #,Dn 1.2 (1).
 - **Checked:** `tests/memsweep` 180 runs pass; `tests/run_cpu040.sh` smoke,
   lc040, machine, mmu, profile pass.
+
+## 5. A store's cache miss: 22 clocks to 15
+
+- **Documented:** MC68040UM 4.2 and 7.4: a copyback store that misses reads
+  its line (one burst, 5 clocks with no wait states) and then writes into
+  it. Section 10 gives no figure for a miss.
+- **Before:** 22 clocks (MOVE.L Dn,(An) + LEA, line not cached, clean
+  victim): E_S_START, E_S_ACT, E_FILL, E_FILLW, E_FILL_W, E_BUS, the burst,
+  E_FILL_INS, E_S_XL, E_S_XLW, E_S_XL2, E_S_ACT, E_S_NEXT, E_S_DONE. The
+  load's miss already skipped eight of these (475-resume); the store's did
+  not.
+- **Change:** `ap68040_dmu.sv`, parameter `FAST_STMISS` (default 1). The
+  store's line read goes to the bus from E_S_ACT, the victim's steps (fv)
+  running during the burst, exactly as the load's; and after a fill with no
+  dirty victim to push, E_FILL_INS marks the part a hit in the way just
+  installed and goes to E_S_NEXT, which is all the second lookup would say.
+  A pending snoop cancel, a dirty victim, a failed or inhibited fill keep
+  the old path.
+- **After:** 15 clocks. A line-crossing store into uncached lines 25.7
+  (was 31.9). The project's profile case "copyback RAM to RAM MOVE.L copy,
+  8 KB" 86 clocks an iteration (108 on 475-resume, with this fork's pacer
+  on as well).
+- **Off:** `FAST_STMISS = 0`.
+- **Checked:** `tests/memsweep` 360 runs pass; a wrong way planted in the
+  new shortcut fails 12 of 18 runs. `tests/run_cpu040.sh` smoke, lc040,
+  machine, mmu, profile pass.

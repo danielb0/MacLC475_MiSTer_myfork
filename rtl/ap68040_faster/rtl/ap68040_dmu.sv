@@ -91,7 +91,13 @@ module ap68040_dmu
 	// load.  Only inside one 2 KB block (the next line has the same tag and
 	// page), with both lines hits and nothing writing either meanwhile;
 	// anything else takes the engine's split job as before.  0: off.
-	parameter bit          DC1_SPLIT = 1
+	parameter bit          DC1_SPLIT = 1,
+	// A store that misses and allocates its line (copyback) takes the two
+	// shortcuts a load's miss has: the line read goes to the bus from
+	// E_S_ACT with the victim's steps run during it (no E_FILL, E_FILLW,
+	// E_FILL_W, E_BUS), and with no dirty victim the fill's own result
+	// answers the lookup (no E_S_XL, E_S_XLW, E_S_XL2, E_S_ACT).  0: off.
+	parameter bit          FAST_STMISS = 1
 )
 (
 	input  logic        clk,
@@ -1885,6 +1891,32 @@ always_ff @(posedge clk) begin
 					f_way  <= victim(lve_q, rrc);
 					e_sret <= E_S_XL;
 					e_st   <= E_FILL;
+					if (FAST_STMISS && !bo_cancel) begin
+						// the line read to the bus now, as a load's miss
+						// below: the victim's steps (fv) run during it
+						fv       <= 2'd1;
+						bo.line  <= 1'b1;
+						bo.rd    <= 1'b1;
+						bo.tt    <= TT_NORMAL;
+						bo.tm    <= m2.r.smode ? TM_SDATA : TM_UDATA;
+						bo.upa   <= e_x.upa;
+						bo.ci    <= 1'b0;
+						bo.lock  <= 1'b0;
+						bo.locke <= 1'b0;
+						bo.ack   <= 2'd0;
+						bo.tln   <= victim(lve_q, rrc);
+						bo_pa    <= {e_x.pa[31:CSH+1], e_va[CSH:4], e_va[3:2], 2'b00};
+						bo_left  <= 3'd4;
+						bo_err   <= 1'b0;
+						bo_got   <= 4'd0;
+						bo_tci   <= 1'b0;
+						bo_avec  <= 1'b0;
+						bo_rd    <= '0;
+						bo_ingnt <= 1'b0;
+						e_ret    <= E_FILL_INS;
+						e_breq   <= 1'b1;
+						e_st     <= E_BUS_W;
+					end
 				end
 				else e_st <= E_S_NEXT;
 			end
@@ -2417,6 +2449,13 @@ always_ff @(posedge clk) begin
 				// (still in bo_line), not a second lookup of that line
 				e_fillhit <= 1'b1;
 				e_st      <= E_S_ACT;
+			end
+			else if (FAST_STMISS && m2.r.mem == M_ST && e_sret == E_S_XL) begin
+				// a store's own fill: the part is a hit in the way just
+				// installed, which is all the second lookup would say
+				e_x.hit <= 1'b1;
+				e_x.way <= f_way;
+				e_st    <= E_S_NEXT;
 			end
 			else e_st <= e_sret;
 		end
