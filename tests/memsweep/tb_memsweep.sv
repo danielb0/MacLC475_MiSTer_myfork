@@ -14,7 +14,7 @@ reg [31:0] rdata = 0;
 reg [31:0] mem [0:(1<<17)-1];
 reg [31:0] exp [0:(1<<17)-1];
 integer WAITS = 0, BWAITS = 0, SB = 0, JIT = 0;
-integer cyc = 0, cnt = 0, bad = 0, i, lim;
+integer cyc = 0, cnt = 0, bad = 0, walks = 0, i, lim;
 reg [31:0] lfsr = 32'hC0FFEE11;
 
 cpu040 #(.AP040_HAS_FPU(0)) dut (
@@ -48,7 +48,7 @@ task finish_run;
                 if (bad < 12) $display("MISMATCH %05x: got %08x expected %08x", i*4, mem[i], exp[i]);
                 bad = bad + 1;
             end
-        if (bad == 0) $display("PASS cycles %0d", cyc);
+        if (bad == 0) $display("PASS table reads %0d cycles %0d", walks, cyc);
         else $display("FAIL %0d long words differ, cycles %0d", bad, cyc);
         $finish;
     end
@@ -60,6 +60,8 @@ always @(posedge clk) begin
     if (!nreset) begin ack <= 0; cnt <= 0; first <= 1; end
     else begin
         if (halted) begin $display("FAIL halted at cycle %0d", cyc); $finish; end
+        // (reads of the translation tables at $60000, mm mode: the MMU is on)
+        if (ack && !wr && addr[31:12] == 20'h00060) walks <= walks + 1;
         if (ack && wr) begin
             if (addr == 32'h50000000) finish_run;
             else case (size)

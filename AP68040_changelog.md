@@ -27,3 +27,34 @@ bus, caches on, copyback); "UM" is the MC68040 User's Manual (M68040UM/AD).
   data-dependent branches; result compared with a model's memory image):
   160 runs pass before and after. A planted error in the split merge is
   caught. `tests/run_cpu040.sh` smoke, lc040, machine, mmu, profile pass.
+
+## 2. Loads across two cache lines: the second lookup in DC1, 2 clocks
+
+- **Documented:** as entry 1 (UM 4.2: two cache accesses).
+- **Before:** 6 clocks (entry 1), the second line read through the engine.
+- **Change:** `ap68040_dmu.sv`, parameter `DC1_SPLIT` (default 1). A load
+  whose operand crosses a line stays in DC1 one more clock, in which the
+  cache RAMs, the valid bits and the stale tracking read the next set; DC2
+  then answers from the two captures on the ordinary fast-load path. Limits:
+  both lines inside one 2 KB block (the next line then has the same tag and
+  the same page), both hits, cachable, not locked. The engine's split job
+  (entry 1) still takes every other case: a miss on either line, a store
+  ahead of the load to either line, a write landing in either set, the last
+  line of a 2 KB block. A second lookup that is disturbed (engine activity,
+  a snoop, a write to the first line) starts over from the first.
+- **After:** 2.1 clocks for `MOVE.L (A0),D0` across two cached lines (UM: 2).
+  Copy loops with a misaligned source 4.0 clocks an iteration (was 4.9), with
+  both misaligned 4.6 (was 5.6). Stores across two lines are unchanged at 6.
+- **Off:** `DC1_SPLIT = 0`.
+- **Checked:** `tests/memsweep`, now with a paged-MMU mode (4 KB pages,
+  copyback and write-through pages) and operands at the last line of a 2 KB
+  block and of a page: 360 runs pass (60 seeds, three modes, store buffer on
+  and off). Planted errors in the new path are caught: the check for stores
+  ahead removed, the merges into the kept long word removed, the restart
+  after a disturbance removed, the second lookup's hit ignored. One planted
+  error is not caught (DC2 keeping its answer through a later write): the
+  engine takes such a load first, so that guard is defensive. The
+  `tests/run_cpu040.sh` suites pass (smoke, lc040, machine, mmu, profile).
+- **Not covered by a test:** bus snoops and interrupts arriving during the
+  second lookup; a build's timing (the cache RAM address has one more
+  multiplexer level).

@@ -1,7 +1,11 @@
 # Random memory-operand programs for cpu040, with the memory image they must
 # leave behind.  The program is checked by its result, not by its timing:
 #
-#   python3 gen.py <seed> <wt|cb> <ops>   ->  prog.hex, exp.hex
+#   python3 gen.py <seed> <wt|cb|mm> <ops>   ->  prog.hex, exp.hex
+#
+# wt: translation off, write-through.  cb: DTT0 makes $00xxxxxx copyback.
+# mm: the MMU on with 4 KB pages (an identity map; the test region's pages
+# alternate copyback and write-through), as the Mac OS runs the 68040.
 #
 # Operands sit on and around cache line boundaries, in lines that share a
 # cache set (so lines are evicted and dirty ones pushed), in a second region
@@ -12,7 +16,7 @@
 import random, sys
 
 seed = int(sys.argv[1]); mode = sys.argv[2]; nops = int(sys.argv[3])
-rnd = random.Random(seed * 2 + (mode == "cb"))
+rnd = random.Random(seed * 4 + ["wt", "cb", "mm"].index(mode))
 MEMLONGS = 1 << 17
 MARK = 0x50000000
 mem = bytearray(MEMLONGS * 4)          # the program image, then left alone
@@ -35,8 +39,13 @@ SZQ = {1: 0, 2: 1, 4: 2}               # ADDQ / TST / ADD's
 # cache), and a few at random
 def hot(lo):
     out = []
-    for k in range(10):
-        line = lo + 0x800 * rnd.randrange(8) + 16 * rnd.randrange(4)
+    for k in range(12):
+        if k < 8:
+            line = lo + 0x800 * rnd.randrange(8) + 16 * rnd.randrange(4)
+        else:
+            # the last line of a 2 KB block (the tag changes with the next
+            # line) or of a page (so does the translation)
+            line = (lo & ~0x7FF) + 0x800 * rnd.randrange(1, 8) - 32
         for _ in range(4):
             out.append(line + 16 + rnd.randrange(-4, 4))
     for _ in range(8):
@@ -90,6 +99,21 @@ def op():
 put32(0, 0x00008000); put32(4, 0x00001000)
 if mode == "cb":
     emit(0x203C, 0x0000, 0xC020, 0x4E7B, 0x0006)    # DTT0: $00xxxxxx copyback
+if mode == "mm":
+    # root $60000 (index A31-25), pointer tables $60200 / $60400 (A24-18),
+    # page tables $60600, $60700 (RAM, 2 x 256 KB) and $60800 (the marker's
+    # page).  U and M are set already: the table search writes nothing back.
+    ROOT, PA, PB, P0, P1, PM = 0x60000, 0x60200, 0x60400, 0x60600, 0x60700, 0x60800
+    put32(ROOT + 4 * 0, PA | 0xA); put32(ROOT + 4 * (MARK >> 25), PB | 0xA)
+    put32(PA + 0, P0 | 0xA); put32(PA + 4, P1 | 0xA)
+    put32(PB + 4 * ((MARK >> 18) & 127), PM | 0xA)
+    put32(PM + 4 * ((MARK >> 12) & 63), MARK | (3 << 5) | 0x19)
+    for pg in range(128):
+        cm = 0
+        if 0x20 <= pg < 0x28: cm = 1 if (pg & 1) else 0     # the cached region: copyback / write-through
+        put32((P0 if pg < 64 else P1) + 4 * (pg & 63), (pg << 12) | (cm << 5) | 0x19)
+    emit(0x203C, ROOT >> 16, ROOT & 0xFFFF, 0x4E7B, 0x0806, 0x4E7B, 0x0807)   # URP, SRP
+    emit(0x203C, 0x0000, 0x8000, 0x4E7B, 0x0003)                             # TC: enable, 4 KB
 emit(0x203C, 0x0100, 0xC060, 0x4E7B, 0x0007)        # DTT1: $01xxxxxx noncachable
 emit(0x203C, 0x8000, 0x8000, 0x4E7B, 0x0002)        # CACR: both caches on
 for i, b in enumerate(BASE): emit(0x41F9 | (i << 9), b >> 16, b & 0xFFFF)

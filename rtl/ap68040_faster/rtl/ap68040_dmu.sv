@@ -84,7 +84,14 @@ module ap68040_dmu
 	// split job): E_IDLE starts its second lookup itself (no E_S_START
 	// clock) and E_SP_3 answers DC2 (no E_S_DONE clock).  8 clocks a
 	// split operand become 6.  0: as before.
-	parameter bit          FAST_SPLIT = 1
+	parameter bit          FAST_SPLIT = 1,
+	// A load across two cache lines makes its second lookup in DC1 (MC68040UM
+	// 4.2: two cache accesses): DC1 keeps the uop a second clock, reads the
+	// next line's set, and DC2 answers from both captures like any fast
+	// load.  Only inside one 2 KB block (the next line has the same tag and
+	// page), with both lines hits and nothing writing either meanwhile;
+	// anything else takes the engine's split job as before.  0: off.
+	parameter bit          DC1_SPLIT = 1
 )
 (
 	input  logic        clk,
@@ -399,7 +406,21 @@ logic  [3:0] bo_got;               // a line read: the long words that arrived
 // The lookup set: AG's address (late: register read, address adders)
 // passes one LUT; the other choices are registers, merged beforehand.
 // Each way's RAMs get their own copy of that LUT (fanout 18, not 72).
-wire [CSB-1:0] la_alt = sn_rset ? sn_pa[CSH:4] : steal ? st_set : m1.a[CSH:4];
+// DC1's second lookup (DC1_SPLIT): m1_go2 is the first lookup's clock of a
+// load that will make one, m1_n the clocks of the second (the RAMs, the
+// valid bits and the stale tracking then look at the next set, m1_set1)
+logic        m1_go2;
+logic        m1_n, m1_nq;          // second lookup; ... past its first clock
+logic        sp_bad;               // something wrote or disturbed the first line since
+logic        sp_ok1;               // the first lookup was a usable hit
+logic        sp_dist;              // this clock disturbs the first capture
+xres_t       sp_x1;                // ... its result
+logic [31:0] sp_hi;                // ... its line's last long word, merges applied
+logic        m2_ph2;               // DC2's uop made the second lookup
+wire [CSB-1:0] m1_set1 = CSB'(m1.a[CSH:4] + 1'd1);
+wire [CSB-1:0] m1_se   = m1_n ? m1_set1 : m1.a[CSH:4];
+wire [CSB-1:0] la_alt = sn_rset ? sn_pa[CSH:4] : steal ? st_set :
+                        (m1_go2 || m1_n) ? m1_set1 : m1.a[CSH:4];
 wire        la_ag    = adv_ag && !sn_rset && !steal;
 
 // tags: port A for lookups (DC1 or stolen), port B for engine reads/writes
@@ -519,9 +540,17 @@ always_ff @(posedge clk) begin
 	l = '0;
 	for (int j = 0; j < 4; j++) if (d1_mj[j]) l = l | pair(dq_rn[j], m1.a[3:2]);
 	dqc <= l;
-	mc_v[0] <= dwq && dwq_src == 2'd0 && dwq_set == m1.a[CSH:4] && d1_mj[dwq_way];
-	mc_v[1] <= dw && dw_src == 2'd0 && dw_set == m1.a[CSH:4] && d1_mj[dw_way];
-	mc_v[2] <= wfm && wfm_set == m1.a[CSH:4] && d1_mj[wfm_way];
+	mc_v[0] <= dwq && dwq_src == 2'd0 && dwq_set == m1_se && d1_mj[dwq_way];
+	mc_v[1] <= dw && dw_src == 2'd0 && dw_set == m1_se && d1_mj[dw_way];
+	mc_v[2] <= wfm && wfm_set == m1_se && d1_mj[wfm_way];
+	// the second lookup's first clock: dqc and the merges are still the
+	// first line's; keep its last long word (the operand starts there)
+	if (m1_n && !m1_nq) begin
+		logic [63:0] p1;
+		p1 = dqc;
+		for (int k = 0; k < 3; k++) if (mc_v[k]) p1 = mrg2(p1, 2'd3, mc_be[k], mc_w[k]);
+		sp_hi <= p1[63:32];
+	end
 	mc_be[0] <= dwq_be; mc_w[0] <= dwq_word;
 	mc_be[1] <= dw_be;  mc_w[1] <= dw_word;
 	mc_be[2] <= wfm_be; mc_w[2] <= wfm_word;
@@ -540,7 +569,9 @@ always_comb begin
 	dqc_m2 = dqc;
 	for (int k = 0; k < 3; k++) if (mc_v[k]) dqc_m2 = mrg2(dqc_m2, m2.r.a[3:2], mc_be[k], mc_w[k]);
 end
-assign dq2 = dq_new ? dqc_m2 : dqh2;
+// (a uop that made the second lookup: the first line's last long word, then
+// the next line's first -- dqc's second, long word 3's pair wraps to 0)
+assign dq2 = dq_new ? (m2_ph2 ? {sp_hi, dqc_m2[31:0]} : dqc_m2) : dqh2;
 
 //--------------------------------------------------------------------------
 // D-ATC
@@ -733,7 +764,7 @@ always_comb begin
 end
 wire  [4:0] m1_end   = {1'b0, m1.a[3:0]} + {2'b00, nbytes(m1.msz)};
 wire        m1_split = (m1.msz != SZ_Q) && (m1_end > 5'd16);
-wire  [7:0] lsd_q    = lsd[m1.a[CSH:4]];
+wire  [7:0] lsd_q    = lsd[m1_se];
 wire        m1_sfast = ((m1.mem == M_LD) || (m1.mem == M_ST && x_dc1.cm == 2'b01)) &&
                        m1_split && x_dc1.ok && !x_dc1.flt && x_dc1.hit && !m1.pastc &&
                        !x_dc1.cm[1] && dc_en && (m1.ack == 2'd0) && !m1.lock;
@@ -783,7 +814,13 @@ wire st_older = (m3.r.v && (m3.r.mem == M_ST || m3.r.mem == M_RMW)) ||
 // read the RAM makes the captured line stale: the engine reads it again
 
 // (a store that left WB is still being written this cycle: dw)
-wire fast_now = m2.r.v && m2.fast && !hzf && !(dw && !dwp && dw_set == m2.r.a[CSH:4]);
+// (a load that made DC1's second lookup: no store ahead of it to either
+// line, no write landing in either set -- its copy takes no merges, so it
+// does not wait for them: the engine's split job reads again)
+wire [CSB-1:0] m2_set1 = CSB'(m2.r.a[CSH:4] + 1'd1);
+wire sf2_blk = m2_ph2 && (hz || st_line(m3, m2_line + 28'd1) || st_line(m4, m2_line + 28'd1) ||
+                          (dw && (dw_set == m2.r.a[CSH:4] || dw_set == m2_set1)));
+wire fast_now = m2.r.v && m2.fast && !hzf && !(dw && !dwp && dw_set == m2.r.a[CSH:4]) && !sf2_blk;
 // (the operand from DC2's two long words: its bytes start at a[1:0] of the
 // first; a split load's bytes past the line are masked by its user)
 wire [31:0] fast_data = take({dq2, 64'd0}, {2'd0, m2.r.a[1:0]}, nbytes(m2.r.msz));
@@ -876,6 +913,10 @@ wire  e_quiet = (e_st == E_IDLE) || (e_st == E_S_START) || (e_st == E_SP_W) ||
                 (e_st == E_SP_2) || (e_st == E_SP_3) || (e_st == E_S_DONE && sp_job) ||
                 e_busq;
 wire  e_idleq = (e_st == E_IDLE) || e_busq;
+// DC1's second lookup, this clock: the first line written (not merged into
+// what was kept), or the caches not left alone
+assign sp_dist = (dw && !dwp && dw_set == m1.a[CSH:4]) || (wfm && wfm_set == m1.a[CSH:4]) ||
+                 !e_idleq || sn_frz || steal || steal_q;
 logic [31:0] bo_wd;               // write data (left aligned)
 logic [127:0] bo_line;            // line write data / line read result
 logic        bo_err;
@@ -1014,7 +1055,7 @@ wire  [31:0] wfs_acc = lalign(st_data, m4.r.msz);
 
 // a fast load behind an older store to its line waits for it (merged into
 // its copy) instead of taking the engine
-wire fast_wait = m2.r.v && m2.fast && (hzf || (dw && !dwp && dw_set == m2.r.a[CSH:4]));
+wire fast_wait = m2.r.v && m2.fast && !m2_ph2 && (hzf || (dw && !dwp && dw_set == m2.r.a[CSH:4]));
 // (not while an older store is in EX: it reaches WB, which has the engine
 // first, before DC2's job -- the bus sees a store before a younger load's
 // access, whatever the timing)
@@ -1136,7 +1177,10 @@ end
 // sending its uop to the engine's general path: after a miss the loads
 // behind it would otherwise each take that path, every one keeping the
 // engine busy for the next)
-assign dm_hold1 = sn_frz || steal || steal_q || (m1.v && m1_stale) ||
+assign m1_go2 = DC1_SPLIT && m1.v && (m1.mem == M_LD) && m1_split && !m1.lock && !m1.pastc &&
+                (m1.ack == 2'd0) && (m1.a[CSH:4] != '1) && dc_en && !m1_n &&
+                !m1_stale && !steal && !steal_q && !sn_frz && e_idleq;
+assign dm_hold1 = m1_go2 || sn_frz || steal || steal_q || (m1.v && m1_stale) ||
                   (e_st != E_IDLE && e_st != E_W_START &&
                    e_st != E_W_PART && e_st != E_W_DONE && !e_busq);
 
@@ -1212,6 +1256,7 @@ always_ff @(posedge clk) begin
 		bo <= '0; bo_wd <= '0; bo_line <= '0; bo_err <= 1'b0; bo_rd <= '0;
 		bo_avec <= 1'b0; bo_tci <= 1'b0; bo_left <= '0; bo_pn <= '0; bo_pa <= '0;
 		steal <= 1'b0; st_la <= '0; st_fc2 <= 1'b0; st_set <= '0;
+		m1_n <= 1'b0; m1_nq <= 1'b0; sp_bad <= 1'b0; sp_ok1 <= 1'b0; sp_x1 <= '0; m2_ph2 <= 1'b0;
 		f_set <= '0; f_way <= '0; f_tag <= '0; fv <= 2'd0;
 		pv_v <= 1'b0; pv_line <= '0; pv_lpa <= '0; pv_dirty <= 1'b0; pv_tln <= '0; pv_lock <= 1'b0;
 		pv_for <= 2'd0; pbe_r <= 1'b0; pbe_a <= '0;
@@ -1278,12 +1323,36 @@ always_ff @(posedge clk) begin
 			if (adv_dc1) m1.v <= 1'b0;
 			m1_tp <= transp_of(m1.a, m1.smode, m1.fc, m1.ack);
 			m1_aset <= tc_p ? m1.a[16:13] : m1.a[15:12];
-			if ((dw && dw_src != 2'd0 && dw_set == m1.a[CSH:4]) || !e_quiet) m1_stale <= 1'b1;
+			if ((dw && dw_src != 2'd0 && dw_set == m1_se) || !e_quiet) m1_stale <= 1'b1;
 			// held, the RAMs and the ATC read DC1's own set again every
 			// clock (la_alt): a clock with the engine quiet and no write to
 			// that set makes the lookup good again from the next one
 			else if (!steal && !sn_rset) m1_stale <= 1'b0;
 		end
+
+		// DC1's second lookup
+		if (adv_ag || adv_dc1) begin
+			m1_n <= 1'b0;
+		end
+		else if (m1_go2) begin
+			// the first lookup's clock ends: its result kept, the RAMs
+			// read the next set from here on
+			m1_n   <= 1'b1;
+			m1_nq  <= 1'b0;
+			sp_x1  <= x_dc1;
+			sp_ok1 <= m1_sfast && !(dw && dw_src != 2'd0 && dw_set == m1.a[CSH:4]);
+			sp_bad <= 1'b0;
+		end
+		else if (m1_n) begin
+			m1_nq <= 1'b1;
+			// disturbed: start over with the first lookup, once its set
+			// has been read again in a quiet clock (m1_stale)
+			if (sp_dist) begin
+				m1_n     <= 1'b0;
+				m1_stale <= 1'b1;
+			end
+		end
+		if (adv_dc1) m2_ph2 <= m1.v && m1_n;
 
 		if (adv_dc1) begin
 			m2.r     <= m1;
@@ -1299,10 +1368,27 @@ always_ff @(posedge clk) begin
 			m2.sfast <= m1_sfast && (m1.mem == M_ST ||
 			            (!m1_stale && !(dw && dw_src != 2'd0 && dw_set == m1.a[CSH:4]) &&
 			             e_idleq));
+			if (m1_n) begin
+				// both lookups made: the first part's result, the second's
+				// hit and way (same page, same tag: only the line differs).
+				// fast: DC2 answers from the two captures; sfast: the
+				// engine's split job may still use the first capture
+				m2.x     <= sp_x1;
+				m2.x1    <= x_dc1;
+				m2.x1.pa <= {sp_x1.pa[31:4] + 28'd1, 4'd0};
+				m2.fast  <= sp_ok1 && !sp_bad && !sp_dist && !m1_stale && x_dc1.hit &&
+				            !(dw && dw_src != 2'd0 && dw_set == m1_set1);
+				m2.sfast <= sp_ok1 && !sp_bad && !sp_dist;
+			end
 		end
 		else begin
 			if (adv_dc2) m2.r.v <= 1'b0;
 			if ((dw && dw_src != 2'd0 && dw_set == m2.r.a[CSH:4]) || !e_idleq) m2.fast <= 1'b0;
+			// (a second-lookup load's copy takes no merges for its second
+			// line, and one for its first would spoil that half)
+			if (m2_ph2 && ((dw && (dw_set == m2.r.a[CSH:4] || dw_set == m2_set1)) ||
+			               (wfm && (wfm_set == m2.r.a[CSH:4] || wfm_set == m2_set1))))
+				m2.fast <= 1'b0;
 			// its own split lookup (a read) leaves the copy as it was
 			if (((dw && dw_src != 2'd0 && dw_set == m2.r.a[CSH:4]) || !e_quiet) && m2.r.mem != M_ST)
 				m2.sfast <= 1'b0;
@@ -2891,6 +2977,7 @@ always_ff @(posedge clk) begin
 			m3.r.v <= 1'b0;
 			m4.r.v <= 1'b0;
 			e_dc2_done <= 1'b0;
+			m1_n   <= 1'b0;
 			if (e_st != E_IDLE) e_kill <= 1'b1;
 			if (e_st == E_IDLE) e_job <= 1'b0;
 		end
@@ -2987,6 +3074,10 @@ always_ff @(posedge clk) begin
 		// set is the untranslated page offset; a lost hit sends the access
 		// to the engine, which looks the line up again)
 		if (vp_lwe && !vp_lv && (|vp_wm) && adv_dc1 && m1.a[CSH:4] == vp_set) m2.x.hit <= 1'b0;
+		if (vp_lwe && (|vp_wm) && m1_n && (vp_set == m1.a[CSH:4] || vp_set == m1_set1)) sp_bad <= 1'b1;
+		if (vp_lwe && (|vp_wm) && m1_n && adv_dc1 && (vp_set == m1.a[CSH:4] || vp_set == m1_set1)) begin
+			m2.fast <= 1'b0; m2.sfast <= 1'b0;
+		end
 		if (vp_lwe && !vp_lv) begin
 			for (int j = 0; j < 4; j++) if (vp_wm[j]) begin
 				if (!adv_dc1) begin
@@ -3096,7 +3187,7 @@ end
 // synthesis translate_off
 // the copies against the flip-flop model (after reset's sweep)
 always_ff @(posedge clk)
-	if (nreset && !clr_rst && (lvd_q != lv[m1.a[CSH:4]] || lve_q != lv[lv_ra])) begin
+	if (nreset && !clr_rst && (lvd_q != lv[m1_se] || lve_q != lv[lv_ra])) begin
 		$display("FAIL: dmu: valid RAM %b/%b, model %b/%b (sets %0d %0d)",
 		         lvd_q, lve_q, lv[m1.a[CSH:4]], lv[lv_ra], m1.a[CSH:4], lv_ra);
 		$finish;

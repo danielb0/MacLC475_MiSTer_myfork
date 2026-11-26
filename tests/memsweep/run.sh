@@ -3,8 +3,8 @@
 #
 #   sh tests/memsweep/run.sh [first seed] [last seed]      (from WSL; default 1 20)
 #
-# OPS=n (default 1500) operations a program.  Each seed runs in both cache
-# modes (write-through, copyback), with the store buffer on and off and a
+# OPS=n (default 1500) operations a program.  Each seed runs in three
+# modes (write-through, copyback, paged MMU), with the store buffer on and off and a
 # bus speed taken from the seed.  A line per run goes to local/tests/memsweep/
 # results.txt as it ends; the exit status is the number of failures.
 set -u
@@ -22,7 +22,7 @@ fi
 cd "$out"
 fails=0
 for seed in $(seq "${1:-1}" "${2:-20}"); do
-    for mode in wt cb; do
+    for mode in wt cb mm; do
         python3 ../../../tests/memsweep/gen.py "$seed" "$mode" "${OPS:-1500}" > gen.log || exit 98
         case $((seed % 4)) in
             0) bus="+WAITS=0 +BWAITS=0" ;;
