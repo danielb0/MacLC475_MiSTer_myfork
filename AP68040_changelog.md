@@ -220,3 +220,31 @@ bus, caches on, copyback); "UM" is the MC68040 User's Manual (M68040UM/AD).
 - Norton's "Function" test read 1.07 of a Quadra 700 after entry 6 (1.01
   before): a line-crossing store at 2 clocks is faster than the real
   processor's. The manual gives the two cache accesses but no time.
+
+## Estimates where the documentation is silent (not yet built)
+
+Agreed 2026-11-26: where no document gives a figure, a reasoned estimate is
+used, named as one, with its basis; entries above rest on the manual, these
+do not.
+
+- **Main memory bus timing of the LC 475** (the MEMCjr, Apple 343S0164-A).
+  Not documented: Apple's developer notes for the LC 475 / Quadra 605 and
+  for the Centris 610, 650 and Quadra 800 (the related MEMC) give no wait
+  states or registers, and MAME's model of the chip is functional only.
+  Estimate: a line read 4-2-2-2 (10 clocks), a single read 4 clocks.
+  Basis: the RAM must be 80 ns or faster (LC 475 note) and a 25 MHz clock
+  is 40 ns, so the access alone is two clocks, with one before it for
+  address decode and the row/column multiplex and one after for data setup;
+  fast-page RAM of that speed needs 45 to 50 ns between accesses in a row,
+  more than one clock, so each later beat takes two -- which is also why
+  the Centris 650 and Quadra 800 interleave bank pairs "reducing access
+  time for burst access cycles" (their note), and the LC 475, with one
+  SIMM socket, cannot. Uncertainty: about a clock on the first beat.
+  For comparison the 68040's minimum is 2-1-1-1 (5), and this core on the
+  board takes about 13 clocks a line and 9 for a single read.
+  Order: remove the core's own overhead around a miss first, then set the
+  bus to the estimate behind a setting; Norton's memory tests as a guide
+  that it is not far off, not as a target.
+- **A store across two cache lines** is left at 2 clocks (entry 6). Norton's
+  Function test reads 1.07 of a Quadra 700 with it; the manual gives the two
+  cache accesses and no time, and no better figure can be argued.
