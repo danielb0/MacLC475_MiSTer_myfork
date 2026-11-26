@@ -79,7 +79,12 @@ module ap68040_dmu
 	// E_S_START straight to E_BUS without waiting for the older
 	// instructions.  Should one of them discard it, nothing was disturbed.
 	// Mask 0: off.
-	parameter logic [31:0] PA_NS_MASK = 32'h0, PA_NS_MATCH = 32'h0
+	parameter logic [31:0] PA_NS_MASK = 32'h0, PA_NS_MATCH = 32'h0,
+	// A load or copyback store across two cache lines, both hits (the fast
+	// split job): E_IDLE starts its second lookup itself (no E_S_START
+	// clock) and E_SP_3 answers DC2 (no E_S_DONE clock).  8 clocks a
+	// split operand become 6.  0: as before.
+	parameter bit          FAST_SPLIT = 1
 )
 (
 	input  logic        clk,
@@ -1522,6 +1527,26 @@ always_ff @(posedge clk) begin
 				// Clear at scheduling; a snoop may freeze E_S_START through a kill.
 				e_kill <= 1'b0;
 				e_st   <= E_S_START;
+				if (FAST_SPLIT && m2.sfast && !e_job) begin
+					// E_S_START's work for the fast split job, now: the next
+					// line's lookup through the stolen ports
+					e_job  <= 1'b1;
+					e_part <= 1'b0;
+					e_va   <= m2.r.a;
+					e_x    <= m2.x;
+					e_acc  <= '0;
+					e_flt  <= 1'b0;
+					e_fromline <= 1'b0;
+					e_fillhit  <= 1'b0;
+					e_n    <= 3'(5'd16 - {1'b0, m2.r.a[3:0]});
+					sp_dw  <= 1'b0;
+					sp_job <= 1'b1;
+					steal  <= 1'b1;
+					st_la  <= {m2.r.a[31:4] + 28'd1, 4'd0};
+					st_fc2 <= m2.r.smode;
+					st_set <= m2.r.a[CSH:4] + 1'd1;
+					e_st   <= E_SP_W;
+				end
 				if ((m2.r.mem == M_LD || m2.r.mem == M_RMW) && m2.x.ok && !m2.x.flt &&
 				    m2.x.pa[31:21] == 11'b1111_1001_000)
 					pe_vram[2:1] <= {m2.split, 1'b1};
@@ -1601,6 +1626,14 @@ always_ff @(posedge clk) begin
 				// to read; WB writes them
 				m2.x1 <= e_x;
 				e_st  <= E_S_DONE;
+				if (FAST_SPLIT && !(pbe_r && pv_for == 2'd0)) begin
+					// what E_S_DONE would do, a clock sooner
+					e_job      <= 1'b0;
+					e_dc2_done <= 1'b1;
+					e_ldata    <= e_acc;
+					steal      <= 1'b0;
+					e_st       <= E_IDLE;
+				end
 			end
 			else if (!e_kill && m2.sfast && m2.r.mem == M_LD && e_x.ok && !e_x.flt && !e_x.walk &&
 			    e_x.hit && !e_x.cm[1] &&
@@ -1613,6 +1646,15 @@ always_ff @(posedge clk) begin
 				         etk;
 				m2.x1 <= e_x;
 				e_st  <= E_S_DONE;
+				if (FAST_SPLIT && !(pbe_r && pv_for == 2'd0)) begin
+					// what E_S_DONE would do, a clock sooner
+					e_job      <= 1'b0;
+					e_dc2_done <= 1'b1;
+					e_ldata    <= (fast_data & ~((32'd1 << (8 * (nbytes(m2.r.msz) - n0))) - 32'd1)) |
+					              etk;
+					steal      <= 1'b0;
+					e_st       <= E_IDLE;
+				end
 			end
 			else begin
 				steal  <= 1'b0;

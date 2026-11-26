@@ -1,3 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 tests/timing/* text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.qip text eol=lf
