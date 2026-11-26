@@ -100,3 +100,33 @@ bus, caches on, copyback); "UM" is the MC68040 User's Manual (M68040UM/AD).
   profile pass.
 - **Still slower than documented** (untouched by this entry): LINK about 5
   clocks (3), NOP 15 (8), mispredicted and indirect branches, traps.
+
+## 4. The pacer's table completed
+
+- **Documented:** MC68040UM 10.4 (MOVE), 10.5 and 10.6, pages 10-9 to 10-28.
+- **Change:** `um_clocks()` now takes the first extension word as well and
+  covers the integer instruction set: MOVE (source by destination, 10-9 and
+  10-10), MOVEA, MOVEQ, ADD/AND/OR/EOR/SUB/CMP/TST/CLR/NEG/NEGX/NOT, the
+  immediate group and CMPI, ADDQ/SUBQ, ADDA, SUBA, CMPA, ADDX/SUBX, CMPM,
+  ABCD/SBCD/NBCD, EXG, EXT, EXTB, Scc, PEA, CHK, MOVE to/from CCR, MOVE from
+  SR, the bit instructions (immediate and register bit number), the bit
+  fields, ROL/ROR/ROXL/ROXR, MOVEM (2 or 3 clocks plus one a register, from
+  the mask), TRAPV, and entry 3's. Not listed, so not paced: instructions
+  that synchronize or run locked (MOVE to SR, the to-SR immediates, MOVEC,
+  MOVES, MOVEP, CAS, CAS2, CHK2, CMP2, TAS on memory, PACK, UNPK, RTE, STOP,
+  RESET, cache and MMU instructions), traps, floating point. Indexed modes
+  are taken at the brief extension word's figure.
+- **After** (`SUITE=2 tests/timing/run.sh`, new second set, 38 cases): 30
+  within 0.1 clock of the manual, among them ADDA.L Dn,An 2.0 (2), SUBA 1.0
+  (1), MOVEA.W (An) 2.0 (2), MOVE (An)+,(An)+ 2.0 (2), indexed MOVE and ADD
+  3.0 (3), ROL # 3.0 (3), ROR Dn 4.0 (4), ROXL 5.0 (5), BSET # 3.0 (3), BCLR
+  Dn 4.0 (4), Scc 2.0 (2), BFEXTU 4.0 (4), CMPM 3.0 (3), ABCD 3.0 (3), the
+  MOVEM pairs 12.9 (13) and 10.8 (11), LEA indexed 4.0 (4). The first set's
+  indexed MOVE went from 1.6 to 3.0 (3) and its MOVEM pair from 30.1 to 32.9
+  (33).
+- **Slower than documented, found by the second set** (not the pacer's
+  doing; for later): MOVE (An),(An) 2.0 clocks (1); MOVE d16,d16 2.5 (2);
+  ADDQ #,d16(An) 3.0 (2); ADDI.L #,Dn 2.3 (1); CMPI.L #,d16(An) 5.0 (2);
+  EXG 3.0 (1 and 2); BFTST 4.0 (3); BTST #,Dn 1.2 (1).
+- **Checked:** `tests/memsweep` 180 runs pass; `tests/run_cpu040.sh` smoke,
+  lc040, machine, mmu, profile pass.

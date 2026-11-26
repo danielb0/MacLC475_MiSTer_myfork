@@ -3,6 +3,7 @@
 # the mode the Mac OS runs the 68040 in (Apple developer note, "CopyBack mode").
 import os, sys
 PASSES = int(os.environ.get('PASSES', '3'))
+SUITE = int(os.environ.get('SUITE', '1'))   # 2: the second set of tests (the marker has room for 63)
 MEMLONGS = 1 << 17
 MARK = 0x50000000          # outside RAM: never cached, always a bus write
 
@@ -16,7 +17,8 @@ def build(mode):
         for w in ws:
             put16(st["pc"], w & 0xFFFF); st["pc"] += 2
     def marker(i): emit(0x7E00 | (i & 0x7F), 0x23C7, MARK >> 16, MARK & 0xFFFF)
-    def test(name, units, um, setup, body):
+    def test(name, units, um, setup, body, suite=1):
+        if suite != SUITE: return
         i = len(tests)
         setup(); marker(2*i); body(); marker(2*i+1)
         tests.append((name, units, um))
@@ -140,6 +142,47 @@ def build(mode):
          lambda: emit(0x223C, 0xACE1, 0xACE1, 0x243C, 0x8020, 0x0003, 0x7063),
          lambda: emit(0xE289, 0x6402, 0xB581, 0x51C8, 0xFFF8))
     test("LEA 4(PC),A0 / JMP (A0)", 32, 5, nop, rep(32, 0x41FA, 0x0004, 0x4ED0))
+    # the second set: one instruction each from the rest of MC68040UM 10.4 - 10.6
+    def t2(name, um, *ws, units=N, setup=nop): test(name, units, um, setup, rep(units, *ws), suite=2)
+    t2("(empty: marker overhead)", 0, units=1) if False else test("(empty: marker overhead)", 1, 0, nop, nop, suite=2)
+    t2("ADDA.L D0,A1", 2, 0xD3C0)
+    t2("SUBA.L D0,A1", 1, 0x93C0)
+    t2("ADDA.L (A0),A1", 2, 0xD3D0, setup=lea_a0)
+    t2("MOVEA.L (A0),A1", 1, 0x2250, setup=lea_a0)
+    t2("MOVEA.W (A0),A1", 2, 0x3250, setup=lea_a0)
+    t2("MOVE.L (A0)+,(A1)+", 2, 0x22D8, setup=lea_a01x)
+    t2("MOVE.L 4(A0),8(A1)", 2, 0x2368, 4, 8, setup=lea_a01x)
+    t2("MOVE.L (A0),(A1), other set", 1, 0x2290, setup=lea_a01x)
+    t2("MOVE.L D0,(8,A0,D1.L)", 3, 0x2180, 0x1808, setup=lambda: (lea_a0(), emit(0x7204)))
+    t2("ADD.L (8,A0,D1.L),D0", 3, 0xD0B0, 0x1808, setup=lambda: (lea_a0(), emit(0x7204)))
+    t2("ADDQ.L #1,4(A0)", 2, 0x52A8, 4, setup=lea_a0)
+    t2("ADDI.L #1,D0", 1, 0x0680, 0, 1)
+    t2("CMPI.L #1,4(A0)", 2, 0x0CA8, 0, 1, 4, setup=lea_a0)
+    t2("CMPA.L D0,A1", 1, 0xB3C0)
+    t2("ROL.L #2,D0", 3, 0xE598)
+    t2("ROR.L D1,D0", 4, 0xE2B8, setup=lambda: emit(0x7203))
+    t2("ROXL.L #1,D0", 5, 0xE390)
+    t2("BTST #3,D0", 1, 0x0800, 3)
+    t2("BTST D1,D0", 2, 0x0300)
+    t2("BSET #3,D0", 3, 0x08C0, 3)
+    t2("BCLR D1,D0", 4, 0x0380)
+    t2("BCHG #3,(A0)", 3, 0x0850, 3, setup=lea_a0)
+    t2("SEQ D0", 2, 0x57C0)
+    t2("EXG D0,D1", 1, 0xC141)
+    t2("EXG A0,A1", 2, 0xC149)
+    t2("EXT.W D0", 2, 0x4880)
+    t2("NEG.L D0", 1, 0x4480)
+    t2("ADDX.L D0,D1", 1, 0xD380)
+    t2("PEA (A0) / ADDQ.L #4,A7", 3, 0x4850, 0x588F, setup=lea_a0)
+    t2("MOVE D0,CCR", 2, 0x44C0)
+    t2("BFEXTU D0{4:8},D1", 4, 0xE9C0, 0x1108)
+    t2("BFTST D0{4:8}", 3, 0xE8C0, 0x0108)
+    t2("CMPM.L (A0)+,(A1)+", 3, 0xB388, setup=lea_a01x)
+    t2("ABCD D0,D1", 3, 0xC300)
+    t2("MOVEM.L D0-D3,-(A7) / MOVEM.L (A7)+,D0-D3", 13, 0x48E7, 0xF000, 0x4CDF, 0x000F, units=16)
+    t2("MOVEM.L A0-A1,-(A7) / MOVEM.L (A7)+,A0-A1", 11, 0x48E7, 0x00C0, 0x4CDF, 0x0300, units=16, setup=lea_a01x)
+    t2("LEA (8,A0,D1.L),A1", 4, 0x43F0, 0x1808, setup=lambda: (lea_a0(), emit(0x7204)))
+    t2("JMP to the next instruction (xxx).L + NOPless", 3, units=1) if False else None
     emit(0x7E7F, 0x23C7, MARK >> 16, MARK & 0xFFFF)     # marker $7F: end of pass
     emit(0x5386)                                        # SUBQ.L #1,D6
     emit(0x6600, (top - (st["pc"] + 2)) & 0xFFFF)       # BNE.W top

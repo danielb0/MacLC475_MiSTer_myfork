@@ -198,69 +198,241 @@ localparam logic [6:0]
 	OP_IACKV = 7'd62;  // interrupt vector from the IACK data
 
 // The clocks an instruction takes in the MC68040's execute stage, from its
-// operation word: MC68040UM section 10 (10.5 Miscellaneous Integer Unit
-// Instruction Timings; 10.6 Integer Unit Instruction Timings), the Execute
-// column with its interlocked clocks added (nL + m = n + m), cache hits and
-// aligned operands.  0: not listed here -- the instruction is not paced.
-// For Bcc and DBcc the figure is the longer case (branch not taken; DBcc
-// with the condition true or the count expired): the back end takes a clock
-// off a taken Bcc and a DBcc that loops (2 and 3 clocks).
-// The effective address adds to the base figure only where the tables say
-// so; the memory-indirect modes ([bd,BR,Xn] and the like) are left at the
-// brief-extension figure.
-function automatic logic [5:0] um_clocks(input logic [15:0] w);
+// operation word and first extension word: MC68040UM section 10 (10.4 MOVE
+// Instruction Timing, 10.5 Miscellaneous Integer Unit Instruction Timings,
+// 10.6 Integer Unit Instruction Timings), the Execute column with its
+// interlocked clocks added (nL + m = n + m), cache hits and aligned
+// operands.  0: not listed here -- the instruction is not paced.
+//  * Bcc and DBcc: the longer case (branch not taken; DBcc with the
+//    condition true or the count expired).  The back end takes a clock off
+//    a taken Bcc and a DBcc that loops (2 and 3 clocks).
+//  * Where the tables give two figures for an immediate and a register
+//    count or bit number, each form has its own.
+//  * (d8,An,Xn) and (d8,PC,Xn) are taken at the brief extension word's
+//    figure whatever the format: the base-displacement and memory-indirect
+//    forms take longer, and the figure is a floor.
+//  * Not listed: the instructions that synchronize the processor or run
+//    locked (MOVE to SR, ORI/ANDI/EORI to SR, MOVEC, MOVES, MOVEP, CAS,
+//    CAS2, CHK2, CMP2, TAS on memory, PACK, UNPK, RTE, STOP, RESET, the
+//    cache and MMU instructions), the traps, and the floating point.
+// um_ea: the addressing mode as the tables' rows --
+//   0 Dn  1 An  2 (An)  3 (An)+  4 -(An)  5 (d16,An)  6 (d8,An,Xn)
+//   7 (xxx).W/.L  8 (d16,PC)  9 (d8,PC,Xn)  10 #<xxx>
+function automatic logic [3:0] um_ea(input logic [2:0] m, input logic [2:0] r);
+	um_ea = (m != 3'd7) ? {1'b0, m} :
+	        (r == 3'd0 || r == 3'd1) ? 4'd7 :
+	        (r == 3'd2) ? 4'd8 : (r == 3'd3) ? 4'd9 : 4'd10;
+endfunction
+// ADD, AND, EOR, OR, SUB, TST, CMP, CLR, NEG, NEGX, NOT (10-13, 10-18, 10-26)
+function automatic logic [5:0] um_alu(input logic [3:0] e);
+	um_alu = (e == 4'd6 || e == 4'd8) ? 6'd3 : (e == 4'd9) ? 6'd5 : 6'd1;
+endfunction
+// MOVE (10-9, 10-10): source row, destination column
+function automatic logic [5:0] um_move(input logic [3:0] s, input logic [3:0] d);
+	logic [5:0] t;
+	t = 6'd1;
+	case (d)
+	4'd0:       t = (s == 4'd8 || s == 4'd6) ? 6'd3 : (s == 4'd9) ? 6'd5 : 6'd1;       // Dn
+	4'd2:       t = (s == 4'd3 || s == 4'd4 || s == 4'd5) ? 6'd2 : (s == 4'd8) ? 6'd3 : // (An)
+	                (s == 4'd6) ? 6'd4 : (s == 4'd9) ? 6'd5 : 6'd1;
+	4'd3, 4'd4: t = (s <= 4'd1) ? 6'd1 : (s == 4'd8) ? 6'd3 : (s == 4'd6) ? 6'd5 :      // (An)+, -(An)
+	                (s == 4'd9) ? 6'd6 : 6'd2;
+	4'd5:       t = (s <= 4'd1) ? 6'd1 : (s == 4'd8) ? 6'd4 : (s == 4'd6) ? 6'd5 :      // (d16,An)
+	                (s == 4'd9) ? 6'd6 : 6'd2;
+	4'd7:       t = (s <= 4'd2) ? 6'd1 : (s == 4'd8) ? 6'd4 : (s == 4'd6) ? 6'd5 :      // (xxx)
+	                (s == 4'd9) ? 6'd6 : 6'd2;
+	4'd6:       t = (s <= 4'd1 || s == 4'd10) ? 6'd3 : (s == 4'd8 || s == 4'd6) ? 6'd8 : // (d8,An,Xn)
+	                (s == 4'd9) ? 6'd9 : 6'd4;
+	default:    t = 6'd1;
+	endcase
+	um_move = t;
+endfunction
+// the bits set in a byte (MOVEM's register counts)
+function automatic logic [3:0] um_ones(input logic [7:0] b);
+	um_ones = 4'(b[0]) + 4'(b[1]) + 4'(b[2]) + 4'(b[3]) + 4'(b[4]) + 4'(b[5]) + 4'(b[6]) + 4'(b[7]);
+endfunction
+function automatic logic [5:0] um_clocks(input logic [15:0] w, input logic [15:0] x);
 	logic [2:0] m, r;
-	logic       idx, pcd, pci;
+	logic [3:0] e;
+	logic       idx, pcd, pci, mem;
 	logic [5:0] t;
 	m   = w[5:3]; r = w[2:0];
-	idx = (m == 3'd6);                    // (d8,An,Xn) / (bd,An,Xn)
-	pcd = (m == 3'd7) && (r == 3'd2);     // (d16,PC)
-	pci = (m == 3'd7) && (r == 3'd3);     // (d8,PC,Xn)
+	e   = um_ea(m, r);
+	idx = (e == 4'd6);
+	pcd = (e == 4'd8);
+	pci = (e == 4'd9);
+	mem = (e >= 4'd2);
 	t   = 6'd0;
-	if (w == 16'h4E71)                          t = 6'd8;    // NOP            1L + 7
-	else if (w == 16'h4E75)                     t = 6'd5;    // RTS            5
-	else if (w == 16'h4E74)                     t = 6'd6;    // RTD            1L + 5
-	else if (w == 16'h4E77)                     t = 6'd7;    // RTR            1L + 6
-	else if (w[15:3] == 13'b0100_1110_0101_0)   t = 6'd3;    // LINK.W         2L + 1
-	else if (w[15:3] == 13'b0100_1000_0000_1)   t = 6'd3;    // LINK.L
-	else if (w[15:3] == 13'b0100_1110_0101_1)   t = 6'd2;    // UNLK           1L + 1
-	else if (w[15:3] == 13'b0100_1000_0100_0)   t = 6'd2;    // SWAP           2
-	else if (w[15:3] == 13'b0100_1000_1000_0)   t = 6'd2;    // EXT.W          2
-	else if (w[15:8] == 8'h60)                  t = 6'd2;    // BRA            2
-	else if (w[15:8] == 8'h61)                  t = 6'd2;    // BSR            1L + 1
-	else if (w[15:12] == 4'h6)                  t = 6'd3;    // Bcc            2 taken, 3 not
-	else if (w[15:12] == 4'h5 && w[7:3] == 5'b11001)
-	                                            t = 6'd4;    // DBcc           3 looping, 4 else
-	else if (w[15:7] == 9'b0100_1110_1) begin               // JSR, JMP (the same figures)
-		t = (m == 3'd2) ? 6'd3 :                             //   (An)        2L + 1
-		    (m == 3'd5) ? 6'd4 :                             //   (d16,An)    3L + 1
-		    idx         ? 6'd6 :                             //   (d8,An,Xn)  6
-		    pcd         ? 6'd6 :                             //   (d16,PC)    5L + 1
-		    pci         ? 6'd7 : 6'd3;                       //   (d8,PC,Xn)  1L + 6; (xxx) 2L + 1
+	case (w[15:12])
+	4'h0: begin
+		if (w[8] && m != 3'd1) begin
+			// bit number in a register: BTST 2, BCHG/BCLR/BSET 4 (10-15, 10-17)
+			if (w[7:6] == 2'b00) t = (e == 4'd5 || e == 4'd7) ? 6'd3 : idx ? 6'd4 : pcd ? 6'd4 : pci ? 6'd6 : 6'd2;
+			else                 t = (e == 4'd5 || e == 4'd7) ? 6'd5 : idx ? 6'd6 : 6'd4;
+		end
+		else if (w[11:8] == 4'h8) begin
+			// immediate bit number: BTST 1, BCHG/BCLR/BSET 3
+			if (w[7:6] == 2'b00) t = (e == 4'd5 || e == 4'd7) ? 6'd2 : idx ? 6'd3 : pcd ? 6'd3 : pci ? 6'd5 : 6'd1;
+			else                 t = (e == 4'd5 || e == 4'd7) ? 6'd4 : idx ? 6'd5 : 6'd3;
+		end
+		else if (!w[8] && w[7:6] != 2'b11 && (w[11:9] == 3'b000 || w[11:9] == 3'b001 ||
+		         w[11:9] == 3'b010 || w[11:9] == 3'b011 || w[11:9] == 3'b101)) begin
+			// ORI, ANDI, SUBI, ADDI, EORI (10-13); to CCR 4 (10-11); to SR not listed
+			if (e == 4'd10) t = (w[7:6] == 2'b00) ? 6'd4 : 6'd0;
+			else            t = (e == 4'd0 || e == 4'd2) ? 6'd1 : idx ? 6'd3 : 6'd2;
+		end
+		else if (w[11:8] == 4'hC && w[7:6] != 2'b11)
+			// CMPI (10-19)
+			t = (e == 4'd0 || e == 4'd2) ? 6'd1 : (idx || pcd) ? 6'd3 : pci ? 6'd6 : 6'd2;
 	end
-	else if (w[15:12] == 4'h4 && w[8:6] == 3'b111) begin    // LEA
-		t = (m == 3'd5) ? 6'd2 :                             //   (d16,An)    1L + 1
-		    idx         ? 6'd4 :                             //   (d8,An,Xn)  4
-		    pcd         ? 6'd4 :                             //   (d16,PC)    3L + 1
-		    pci         ? 6'd5 : 6'd1;                       //   (d8,PC,Xn)  1L + 4; (An), (xxx) 1
+	4'h1, 4'h2, 4'h3: begin
+		logic [3:0] d;
+		d = um_ea(w[8:6], w[11:9]);
+		if (w[8:6] == 3'd1)
+			// MOVEA.L (10-23): 1; MOVEA.W a clock more except from Dn, An, #<xxx>
+			t = (pcd ? 6'd3 : idx ? 6'd4 : pci ? 6'd5 : 6'd1) +
+			    ((w[13:12] == 2'b11 && e >= 4'd2 && e != 4'd10) ? 6'd1 : 6'd0);
+		else
+			t = um_move(e, d);
 	end
-	else if (w[15:12] == 4'hC && w[7:6] == 2'b11)           // MULU.W 14, MULS.W 16
-		t = (w[8] ? 6'd16 : 6'd14) + (idx ? 6'd2 : pci ? 6'd4 : 6'd0);
-	else if (w[15:12] == 4'h8 && w[7:6] == 2'b11)           // DIVU.W, DIVS.W 27
-		t = 6'd27 + (idx ? 6'd3 : pci ? 6'd4 : 6'd0);
-	else if (w[15:6] == 10'b0100_1100_00)                   // MULU.L, MULS.L 20
-		t = 6'd20 + (idx ? 6'd2 : pci ? 6'd4 : 6'd0);
-	else if (w[15:6] == 10'b0100_1100_01)                   // DIVU.L, DIVS.L, DIVUL, DIVSL 44
-		t = 6'd44 + (idx ? 6'd3 : pci ? 6'd4 : 6'd0);
-	else if (w[15:12] == 4'hE && w[7:6] != 2'b11 && !w[4]) begin
-		// ASd, LSd on a data register (w[4:3]: 00 AS, 01 LS; rotates not
-		// listed here).  ASL 3 / 4 (immediate / register count), ASR, LSL,
-		// LSR 2 / 3
-		t = (w[3] == 1'b0 && w[8]) ? (w[5] ? 6'd4 : 6'd3) : (w[5] ? 6'd3 : 6'd2);
+	4'h4: begin
+		if (w == 16'h4E71)                          t = 6'd8;    // NOP            1L + 7
+		else if (w == 16'h4E75)                     t = 6'd5;    // RTS            5
+		else if (w == 16'h4E74)                     t = 6'd6;    // RTD            1L + 5
+		else if (w == 16'h4E77)                     t = 6'd7;    // RTR            1L + 6
+		else if (w == 16'h4E76)                     t = 6'd5;    // TRAPV not taken 5
+		else if (w[15:3] == 13'b0100_1110_0101_0)   t = 6'd3;    // LINK.W         2L + 1
+		else if (w[15:3] == 13'b0100_1000_0000_1)   t = 6'd3;    // LINK.L
+		else if (w[15:3] == 13'b0100_1110_0101_1)   t = 6'd2;    // UNLK           1L + 1
+		else if (w[15:3] == 13'b0100_1000_0100_0)   t = 6'd2;    // SWAP           2
+		else if (w[15:3] == 13'b0100_1000_1000_0)   t = 6'd2;    // EXT.W          2
+		else if (w[15:3] == 13'b0100_1000_1100_0)   t = 6'd1;    // EXT.L          1
+		else if (w[15:3] == 13'b0100_1001_1100_0)   t = 6'd1;    // EXTB           1
+		else if (w[15:7] == 9'b0100_1110_1) begin               // JSR, JMP (10-20, 10-21: the same)
+			t = (e == 4'd2) ? 6'd3 :                             //   (An)        2L + 1
+			    (e == 4'd5) ? 6'd4 :                             //   (d16,An)    3L + 1
+			    idx         ? 6'd6 :                             //   (d8,An,Xn)  6
+			    pcd         ? 6'd6 :                             //   (d16,PC)    5L + 1
+			    pci         ? 6'd7 : 6'd3;                       //   (d8,PC,Xn)  1L + 6; (xxx) 2L + 1
+		end
+		else if (w[8:6] == 3'b111) begin                        // LEA (10-21)
+			t = (e == 4'd5) ? 6'd2 : idx ? 6'd4 : pcd ? 6'd4 : pci ? 6'd5 : 6'd1;
+		end
+		else if (w[8:6] == 3'b110 || w[8:6] == 3'b100)          // CHK (10-17), in bounds
+			t = (e == 4'd0 || e == 4'd10) ? 6'd8 : idx ? 6'd10 : pcd ? 6'd10 : pci ? 6'd11 : 6'd9;
+		else if (w[11:6] == 6'b0000_11)                         // MOVE from SR (10-22)
+			t = idx ? 6'd5 : 6'd3;
+		else if (w[11:6] == 6'b0010_11 || w[11:6] == 6'b0100_11) // MOVE from CCR (10-21), to CCR (10-22)
+			t = (idx || pcd) ? 6'd4 : pci ? 6'd5 : 6'd2;
+		else if ((w[11:8] == 4'h0 || w[11:8] == 4'h2 || w[11:8] == 4'h4 || w[11:8] == 4'h6 ||
+		          w[11:8] == 4'hA) && w[7:6] != 2'b11)          // NEGX, CLR, NEG, NOT, TST
+			t = um_alu(e);
+		else if (w[11:6] == 6'b1010_11)                         // TAS (10-28): Dn 2; memory runs locked
+			t = (e == 4'd0) ? 6'd2 : 6'd0;
+		else if (w[11:6] == 6'b1000_00)                         // NBCD (10-25)
+			t = (e == 4'd0) ? 6'd3 : idx ? 6'd4 : 6'd2;
+		else if (w[11:6] == 6'b1000_01)                         // PEA (10-26)
+			t = (idx || pcd) ? 6'd4 : pci ? 6'd6 : 6'd2;
+		else if (w[11:7] == 5'b1000_1) begin                    // MOVEM <list>,<ea> (10-23): 1L + 1 + D' + A'
+			logic [3:0] nd, na;
+			// -(An): the mask is reversed, D0 in bit 15
+			nd = (e == 4'd4) ? um_ones(x[15:8]) : um_ones(x[7:0]);
+			na = (e == 4'd4) ? um_ones(x[7:0])  : um_ones(x[15:8]);
+			if (nd == 4'd0) nd = 4'd1;
+			t = (idx ? 6'd9 : 6'd2) + {2'd0, nd} + {2'd0, na};
+		end
+		else if (w[11:7] == 5'b1100_1) begin                    // MOVEM <ea>,<list>: 1L + 2 + D' + A'
+			logic [3:0] nd, na;                                  //   (.W: N more for N address registers)
+			nd = um_ones(x[7:0]); na = um_ones(x[15:8]);
+			if (nd == 4'd0) nd = 4'd1;
+			t = (idx ? 6'd10 : pcd ? 6'd4 : pci ? 6'd11 : 6'd3) + {2'd0, nd} + {2'd0, na} +
+			    (w[6] ? 6'd0 : {2'd0, na});
+		end
+		else if (w[11:6] == 6'b1100_00)                         // MULU.L, MULS.L 20 (10-25)
+			t = 6'd20 + (idx ? 6'd2 : pci ? 6'd4 : 6'd0);
+		else if (w[11:6] == 6'b1100_01)                         // DIVU.L, DIVS.L, DIVUL, DIVSL 44 (10-20)
+			t = 6'd44 + (idx ? 6'd3 : pci ? 6'd4 : 6'd0);
 	end
-	else if (w[15:11] == 5'b1110_0 && w[10] == 1'b0 && w[7:6] == 2'b11)
-		// ASd, LSd on memory (w[10:9]: 00 AS, 01 LS): ASL 3, the others 2
-		t = ((w[9] == 1'b0 && w[8]) ? 6'd3 : 6'd2) + (idx ? 6'd2 : 6'd0);
+	4'h5: begin
+		if (w[7:6] != 2'b11)                                    // ADDQ, SUBQ (10-14)
+			t = (e == 4'd3 || e == 4'd4 || e == 4'd5) ? 6'd2 : idx ? 6'd3 : 6'd1;
+		else if (m == 3'd1)                     t = 6'd4;        // DBcc           3 looping, 4 else
+		else if (e <= 4'd7)                                     // Scc (10-27)
+			t = idx ? 6'd5 : 6'd2;
+	end
+	4'h6: t = (w[11:8] == 4'h0 || w[11:8] == 4'h1) ? 6'd2 : 6'd3;   // BRA 2, BSR 1L + 1, Bcc 2 taken / 3 not
+	4'h7: t = 6'd1;                                              // MOVEQ
+	4'h8: begin
+		if (w[7:6] == 2'b11)                                    // DIVU.W, DIVS.W 27 (10-20)
+			t = 6'd27 + (idx ? 6'd3 : pci ? 6'd4 : 6'd0);
+		else if (w[8:4] == 5'b1_0000)           t = m[0] ? 6'd4 : 6'd3;   // SBCD
+		else if (w[8] && w[5:4] == 2'b00)       t = 6'd0;        // PACK, UNPK: not listed
+		else                                    t = um_alu(e);   // OR
+	end
+	4'h9, 4'hD: begin
+		if (w[7:6] == 2'b11) begin
+			if (w[15:12] == 4'hD)                               // ADDA (10-13)
+				t = (e == 4'd1 || e == 4'd10) ? 6'd1 : (e == 4'd3 || e == 4'd4 || e == 4'd5) ? 6'd3 :
+				    pcd ? 6'd4 : idx ? 6'd5 : pci ? 6'd6 : 6'd2;
+			else                                                // SUBA (10-27)
+				t = (e == 4'd0) ? 6'd1 : (e == 4'd3 || e == 4'd4 || e == 4'd5) ? 6'd3 :
+				    pcd ? 6'd4 : idx ? 6'd5 : pci ? 6'd6 : 6'd2;
+		end
+		else if (w[8] && w[5:4] == 2'b00)       t = m[0] ? 6'd3 : 6'd1;   // ADDX, SUBX
+		else                                    t = um_alu(e);   // ADD, SUB
+	end
+	4'hB: begin
+		if (w[7:6] == 2'b11)                                    // CMPA (10-19)
+			t = (e == 4'd3 || e == 4'd4 || e == 4'd5) ? 6'd2 : (idx || pcd) ? 6'd3 : pci ? 6'd5 : 6'd1;
+		else if (w[8] && m == 3'd1)             t = 6'd3;        // CMPM           1L + 2
+		else                                    t = um_alu(e);   // CMP, EOR
+	end
+	4'hC: begin
+		if (w[7:6] == 2'b11)                                    // MULU.W 14, MULS.W 16 (10-25)
+			t = (w[8] ? 6'd16 : 6'd14) + (idx ? 6'd2 : pci ? 6'd4 : 6'd0);
+		else if (w[8:4] == 5'b1_0000)           t = m[0] ? 6'd4 : 6'd3;   // ABCD
+		else if (w[8:3] == 6'b1_0100_0)         t = 6'd1;        // EXG Dx,Dy
+		else if (w[8:3] == 6'b1_0100_1)         t = 6'd2;        // EXG Ax,Ay      1L + 1
+		else if (w[8:3] == 6'b1_1000_1)         t = 6'd1;        // EXG Dx,Ay
+		else                                    t = um_alu(e);   // AND
+	end
+	4'hE: begin
+		if (w[7:6] != 2'b11) begin
+			// shifts and rotates of a data register (10-14, 10-26, 10-27),
+			// immediate / register count: ASL 3/4; ASR, LSL, LSR 2/3;
+			// ROL, ROR 3/4; ROXL, ROXR 5/6
+			case (w[4:3])
+			2'b00:   t = w[8] ? (w[5] ? 6'd4 : 6'd3) : (w[5] ? 6'd3 : 6'd2);
+			2'b01:   t = w[5] ? 6'd3 : 6'd2;
+			2'b10:   t = w[5] ? 6'd6 : 6'd5;
+			default: t = w[5] ? 6'd4 : 6'd3;
+			endcase
+		end
+		else if (!w[11]) begin
+			// ... of memory: ASL 3; ASR, LSL, LSR 2; ROXL, ROXR 2; ROL, ROR 3
+			case (w[10:9])
+			2'b00:   t = w[8] ? 6'd3 : 6'd2;
+			2'b01:   t = 6'd2;
+			2'b10:   t = 6'd2;
+			default: t = 6'd3;
+			endcase
+			if (idx) t = t + 6'd2;
+		end
+		else begin
+			// bit fields (10-15, 10-16), immediate offset and width: Dn /
+			// memory.  BFTST 3/9, BFEXTU and BFEXTS 4/9, BFCHG, BFCLR and
+			// BFSET 6/10, BFFFO 6/11, BFINS 5/9
+			case (w[10:8])
+			3'd0:             t = mem ? 6'd9  : 6'd3;
+			3'd1, 3'd3:       t = mem ? 6'd9  : 6'd4;
+			3'd2, 3'd4, 3'd6: t = mem ? 6'd10 : 6'd6;
+			3'd5:             t = mem ? 6'd11 : 6'd6;
+			default:          t = mem ? 6'd9  : 6'd5;
+			endcase
+		end
+	end
+	default: t = 6'd0;
+	endcase
 	um_clocks = t;
 endfunction
 
