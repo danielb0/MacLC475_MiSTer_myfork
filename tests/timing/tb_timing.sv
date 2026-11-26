@@ -27,7 +27,7 @@ cpu040 #(.AP040_HAS_FPU(0)) dut (
     .cache_line_valid(1'b0), .cache_line_tag(28'd0), .cache_line_data(128'd0),
     .store_buffer_ok(SB != 0), .bus_req(req), .bus_write(wr), .bus_instr(instr),
     .bus_size(size), .bus_addr(addr), .bus_wdata(wdata), .bus_fc(),
-    .bus_ack(ack), .bus_rdata(rdata), .walker_req(), .walker_we(),
+    .bus_ack(ack), .bus_rdata(rdata), .bus_line_more(line_more), .walker_req(), .walker_we(),
     .walker_addr(), .walker_wdat(), .walker_ack(1'b0), .walker_data(32'd0),
     .walker_berr(1'b0), .snoop_stb(1'b0), .snoop_addr(32'd0),
     .nresetout(), .nmi_ack_toggle(), .cacr_out(), .vbr_out(),
@@ -38,8 +38,14 @@ cpu040 #(.AP040_HAS_FPU(0)) dut (
     .perf_rows(), .perf_rd_idx(6'd0), .perf_rd_data()
 );
 
+wire line_more;
 wire [16:0] la = addr[18:2];
-wire [31:0] ml = mem[la];
+// lc475's line burst: in the clock a line read's beat is acknowledged with
+// more beats to come, the next longword is looked up and its acknowledge
+// registered for the next clock (BWAITS = 0 only)
+wire burst = ack && req && !wr && line_more && (BWAITS == 0);
+wire [1:0] nlw = addr[3:2] + 2'd1;
+wire [31:0] ml = mem[burst ? {addr[18:4], nlw} : la];
 reg first = 1;
 always @(posedge clk) begin
     cyc <= cyc + 1;
@@ -81,7 +87,8 @@ always @(posedge clk) begin
 `else
         // the machine-side contract behind wombat_store_buffer: one-clock
         // acknowledge pulses, the request seen with ack low in between
-        if (req && !ack) begin
+        if (burst) ack <= 1;
+        else if (req && !ack) begin
             if (cnt < (first ? WAITS : BWAITS)) cnt <= cnt + 1;
             else begin ack <= 1; cnt <= 0; first <= tb_timing.dut.bus_adapter.last; end
         end
