@@ -102,6 +102,12 @@ def build(mode):
     test("NOP", 16, 8, nop, rep(16, 0x4E71))
     test("D-cache read miss: MOVE.L (A3),D0 / LEA 16(A3),A3", N, -1, nop, rep(N, 0x2013, 0x47EB, 0x0010))
     test("D-cache write miss: MOVE.L D0,(A4) / LEA 16(A4),A4", N, -1, nop, rep(N, 0x2880, 0x49EC, 0x0010))
+    # controls for the store/load stall: the same moves with the two addresses in
+    # different cache sets, and an unrelated store followed by a load
+    def lea_a01x(): emit(0x41F9, 0x0002, 0x0000, 0x43F9, 0x0002, 0x1040)
+    test("MOVE.L (A0),(A1), other set", N, 1, lea_a01x, rep(N, 0x2290))
+    test("MOVE.L D0,(A1) / MOVE.L (A0),D1, other set", N, 2, lea_a01x, rep(N, 0x2280, 0x2210))
+    test("MOVE.L D0,(A1) / ADD.L D2,D3 / MOVE.L (A0),D1, other set", N, 3, lea_a01x, rep(N, 0x2280, 0xD682, 0x2210))
     emit(0x7E7F, 0x23C7, MARK >> 16, MARK & 0xFFFF)     # marker $7F: end of pass
     emit(0x5386)                                        # SUBQ.L #1,D6
     emit(0x6600, (top - (st["pc"] + 2)) & 0xFFFF)       # BNE.W top
