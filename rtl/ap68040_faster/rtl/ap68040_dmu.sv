@@ -423,6 +423,7 @@ logic        sp_dist;              // this clock disturbs the first capture
 xres_t       sp_x1;                // ... its result
 logic [31:0] sp_hi;                // ... its line's last long word, merges applied
 logic        m2_ph2;               // DC2's uop made the second lookup
+logic        m2_st2;               // ... a store, both its lines copyback hits: WB writes them
 wire [CSB-1:0] m1_set1 = CSB'(m1.a[CSH:4] + 1'd1);
 wire [CSB-1:0] m1_se   = m1_n ? m1_set1 : m1.a[CSH:4];
 wire [CSB-1:0] la_alt = sn_rset ? sn_pa[CSH:4] : steal ? st_set :
@@ -837,7 +838,7 @@ wire [31:0] fast_data = take({dq2, 64'd0}, {2'd0, m2.r.a[1:0]}, nbytes(m2.r.msz)
 // the data cache off, has nothing to do there -- E_S_ACT would trust this
 // same lookup -- and a frame buffer destination never hits).  A MOVE16
 // store allocates nothing, copyback or not
-wire st_simple = m2.r.v && (m2.r.mem == M_ST) && m2.x.ok && !m2.x.flt && !m2.split &&
+wire st_simple = m2.r.v && (m2.r.mem == M_ST) && m2.x.ok && !m2.x.flt && (!m2.split || m2_st2) &&
                  (m2.r.msz != SZ_Q || !m2.x.hit || !dc_en) &&
                  !(dc_en && m2.x.cm == 2'b01 && !m2.x.hit && !m2.r.noalloc && !m2.r.lock &&
                    m2.r.msz != SZ_Q);
@@ -921,7 +922,10 @@ wire  e_quiet = (e_st == E_IDLE) || (e_st == E_S_START) || (e_st == E_SP_W) ||
 wire  e_idleq = (e_st == E_IDLE) || e_busq;
 // DC1's second lookup, this clock: the first line written (not merged into
 // what was kept), or the caches not left alone
-assign sp_dist = (dw && !dwp && dw_set == m1.a[CSH:4]) || (wfm && wfm_set == m1.a[CSH:4]) ||
+// (a store keeps no data from its first lookup: only the caches' own
+// activity disturbs it, not a write of the line's bytes)
+assign sp_dist = (m1.mem != M_ST && ((dw && !dwp && dw_set == m1.a[CSH:4]) ||
+                                     (wfm && wfm_set == m1.a[CSH:4]))) ||
                  !e_idleq || sn_frz || steal || steal_q;
 logic [31:0] bo_wd;               // write data (left aligned)
 logic [127:0] bo_line;            // line write data / line read result
@@ -1183,7 +1187,7 @@ end
 // sending its uop to the engine's general path: after a miss the loads
 // behind it would otherwise each take that path, every one keeping the
 // engine busy for the next)
-assign m1_go2 = DC1_SPLIT && m1.v && (m1.mem == M_LD) && m1_split && !m1.lock && !m1.pastc &&
+assign m1_go2 = DC1_SPLIT && m1.v && (m1.mem == M_LD || m1.mem == M_ST) && m1_split && !m1.lock && !m1.pastc &&
                 (m1.ack == 2'd0) && (m1.a[CSH:4] != '1) && dc_en && !m1_n &&
                 !m1_stale && !steal && !steal_q && !sn_frz && e_idleq;
 assign dm_hold1 = m1_go2 || sn_frz || steal || steal_q || (m1.v && m1_stale) ||
@@ -1262,7 +1266,7 @@ always_ff @(posedge clk) begin
 		bo <= '0; bo_wd <= '0; bo_line <= '0; bo_err <= 1'b0; bo_rd <= '0;
 		bo_avec <= 1'b0; bo_tci <= 1'b0; bo_left <= '0; bo_pn <= '0; bo_pa <= '0;
 		steal <= 1'b0; st_la <= '0; st_fc2 <= 1'b0; st_set <= '0;
-		m1_n <= 1'b0; m1_nq <= 1'b0; sp_bad <= 1'b0; sp_ok1 <= 1'b0; sp_x1 <= '0; m2_ph2 <= 1'b0;
+		m1_n <= 1'b0; m1_nq <= 1'b0; sp_bad <= 1'b0; sp_ok1 <= 1'b0; sp_x1 <= '0; m2_ph2 <= 1'b0; m2_st2 <= 1'b0;
 		f_set <= '0; f_way <= '0; f_tag <= '0; fv <= 2'd0;
 		pv_v <= 1'b0; pv_line <= '0; pv_lpa <= '0; pv_dirty <= 1'b0; pv_tln <= '0; pv_lock <= 1'b0;
 		pv_for <= 2'd0; pbe_r <= 1'b0; pbe_a <= '0;
@@ -1359,6 +1363,12 @@ always_ff @(posedge clk) begin
 			end
 		end
 		if (adv_dc1) m2_ph2 <= m1.v && m1_n;
+		// (a store across two lines with both lookups made: nothing is left
+		// for DC2 when both are copyback hits -- WB's two-part fast store
+		// writes them, wb_fs; anything else takes the engine as before)
+		if (adv_dc1) m2_st2 <= m1.v && m1_n && (m1.mem == M_ST) && sp_ok1 && !sp_bad && !sp_dist &&
+		                       !m1_stale && x_dc1.ok && !x_dc1.flt && x_dc1.hit && (x_dc1.cm == 2'b01) &&
+		                       !(dw && dw_src != 2'd0 && dw_set == m1_set1);
 
 		if (adv_dc1) begin
 			m2.r     <= m1;
@@ -1382,9 +1392,18 @@ always_ff @(posedge clk) begin
 				m2.x     <= sp_x1;
 				m2.x1    <= x_dc1;
 				m2.x1.pa <= {sp_x1.pa[31:4] + 28'd1, 4'd0};
-				m2.fast  <= sp_ok1 && !sp_bad && !sp_dist && !m1_stale && x_dc1.hit &&
+				m2.fast  <= (m1.mem == M_LD) && sp_ok1 && !sp_bad && !sp_dist && !m1_stale && x_dc1.hit &&
 				            !(dw && dw_src != 2'd0 && dw_set == m1_set1);
 				m2.sfast <= sp_ok1 && !sp_bad && !sp_dist;
+				if (m1.mem == M_ST) begin
+					// (the second part's result counts only when it is a
+					// clean copyback hit, m2_st2: the engine's job, should it
+					// run, makes its own)
+					if (!(sp_ok1 && !sp_bad && !sp_dist && !m1_stale && x_dc1.ok && !x_dc1.flt &&
+					      x_dc1.hit && x_dc1.cm == 2'b01 &&
+					      !(dw && dw_src != 2'd0 && dw_set == m1_set1)))
+						m2.x1 <= '0;
+				end
 			end
 		end
 		else begin
@@ -3115,7 +3134,8 @@ always_ff @(posedge clk) begin
 		if (vp_lwe && !vp_lv && (|vp_wm) && adv_dc1 && m1.a[CSH:4] == vp_set) m2.x.hit <= 1'b0;
 		if (vp_lwe && (|vp_wm) && m1_n && (vp_set == m1.a[CSH:4] || vp_set == m1_set1)) sp_bad <= 1'b1;
 		if (vp_lwe && (|vp_wm) && m1_n && adv_dc1 && (vp_set == m1.a[CSH:4] || vp_set == m1_set1)) begin
-			m2.fast <= 1'b0; m2.sfast <= 1'b0;
+			m2.fast <= 1'b0; m2.sfast <= 1'b0; m2_st2 <= 1'b0;
+			m2.x.hit <= 1'b0; m2.x1.hit <= 1'b0;
 		end
 		if (vp_lwe && !vp_lv) begin
 			for (int j = 0; j < 4; j++) if (vp_wm[j]) begin

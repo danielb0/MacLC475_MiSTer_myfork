@@ -156,3 +156,39 @@ bus, caches on, copyback); "UM" is the MC68040 User's Manual (M68040UM/AD).
 - **Checked:** `tests/memsweep` 360 runs pass; a wrong way planted in the
   new shortcut fails 12 of 18 runs. `tests/run_cpu040.sh` smoke, lc040,
   machine, mmu, profile pass.
+
+## 6. Stores across two cache lines: the second lookup in DC1, 2 clocks
+
+- **Documented:** MC68040UM 4.2 (two cache accesses); one clock an extra
+  access gives 2 clocks for a long word store across a line.
+- **Before:** 6 clocks (entry 1), the second line looked up by the engine.
+- **Change:** `ap68040_dmu.sv`, under `DC1_SPLIT` (entry 2). A store across
+  a line makes its second lookup in DC1 as a load does. When both lines are
+  copyback hits (`m2_st2`) DC2 has nothing left to do and WB's existing
+  two-part fast store (`wb_fs`) writes them; anything else takes the
+  engine's job as before. A store keeps no data from its first lookup, so
+  a write of the line's bytes during the second lookup does not disturb it
+  (only the caches' own activity does).
+- **After:** 2.0 clocks. Copy loops: destination misaligned 5.3 clocks an
+  iteration (UM 5.25), source misaligned 5.6 (5.5), both 5.1 (5.75).
+- **Checked:** `tests/memsweep` 360 runs pass; ignoring the second line's
+  hit fails 8 of 18 runs. `tests/run_cpu040.sh` smoke, lc040, machine, mmu,
+  profile pass.
+
+## Notes for later (found while measuring entries 5 and 6)
+
+- **A load behind a store of the same bytes waits two clocks** (store
+  then load 4 clocks; none once two instructions separate them). The manual
+  describes pending, deferrable write-backs (2.1, 4.2) and gives no timing
+  for a read that depends on one; the store's data does not exist before
+  the end of its execute clock. Left as it is: no documented figure.
+  `tests/timing` SUITE=2 has cases with and without the dependency; with
+  independent addresses a store and a load take 2.0 clocks (UM 2).
+- **Read-modify-write instructions on neighbouring long words stall**:
+  ADD.L Dn,(An)+ 2.5 clocks (UM 1), ADDQ.L #,(An)+ 2.8 (2). An RMW is
+  compared with a load behind it by line, not by bytes.
+- **Multi-word instructions are supplied slowly**: MOVE.L d16(An),Dn 1.2
+  clocks, MOVE.L Dn,d16(An) 1.6, ADDI.L #,Dn 2.3 (UM 1 each); CMPI.L
+  #,d16(An) 5.0 (2). The fetch side, not the data side.
+- **A memory-to-memory MOVE is two uops**: MOVE.L (An),(An) 2 clocks
+  (UM 1). The forms the manual gives 2 clocks to are met.

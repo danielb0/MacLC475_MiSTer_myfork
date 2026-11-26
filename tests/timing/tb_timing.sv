@@ -11,7 +11,7 @@ wire [31:0] addr, wdata;
 reg ack = 0;
 reg [31:0] rdata = 0;
 reg [31:0] mem [0:(1<<17)-1];
-integer WAITS = 0, BWAITS = 0, SB = 0, TRACE = -1, TPASS = 2, TMAX = 400;
+integer WAITS = 0, BWAITS = 0, SB = 0, TRACE = -1, TPASS = 2, TMAX = 400, DM = 0;
 reg tracing = 0;
 integer tlines = 0;
 integer cyc = 0, cnt = 0;
@@ -121,6 +121,11 @@ always @(posedge clk) if (tracing && tlines < TMAX) begin
     if (`CPU.d_redir_v) s_dr = $sformatf(" dredir>%04x", `CPU.d_redir_pc[15:0]);
     if (`CPU.exc_go)    s_ex = $sformatf(" EXC%0d", `CPU.exc_kind);
     if (req) s_bus = $sformatf("%s%s %08x%s", wr ? "W" : "R", instr ? "i" : "d", addr, ack ? " ACK" : "");
+    // +DM=1: the data memory unit's view of DC2 (ready; fast, sfast, hit; simple store; slow; stale DC1; pace hold)
+    if (DM != 0) $display("TD %6d rdy%b fast%b sf%b hit%b simple%b slow%b fwait%b job%b done%b stale%b hold1%b exst%b pace%b",
+        cyc, `CPU.dmu.dc2_rdy, `CPU.dmu.m2.fast, `CPU.dmu.m2.sfast, `CPU.dmu.m2.x.hit, `CPU.dmu.st_simple,
+        `CPU.dmu.dc2_slow, `CPU.dmu.fast_wait, `CPU.dmu.e_job, `CPU.dmu.e_dc2_done, `CPU.dmu.m1_stale,
+        `CPU.dmu.dm_hold1, `CPU.dmu.ex_st, `CPU.be.pace_hold);
     $display("T %6d q%0d@%04x rq%0d uq%0d | AG %s DC1 %s DC2 %s EX %s op%02d WB %s | adv %b%b%b%b%b%s%s%s%s | F:%s D:%s B:%0d %s",
         cyc, `CPU.qcnt, `CPU.qpc[15:0], `CPU.rq_n, `CPU.uq_n,
         stg(`CPU.be.ag_v, `CPU.be.ag_u.pc, `CPU.be.ag_u.first, `CPU.be.ag_u.last),
@@ -161,6 +166,7 @@ initial begin
     void'($value$plusargs("SB=%d", SB));
     void'($value$plusargs("TRACE=%d", TRACE));
     void'($value$plusargs("TPASS=%d", TPASS));
+    void'($value$plusargs("DM=%d", DM));
     void'($value$plusargs("TMAX=%d", TMAX));
     repeat (4) @(negedge clk);
     nreset = 1;

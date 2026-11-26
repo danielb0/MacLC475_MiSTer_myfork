@@ -182,7 +182,14 @@ def build(mode):
     t2("MOVEM.L D0-D3,-(A7) / MOVEM.L (A7)+,D0-D3", 13, 0x48E7, 0xF000, 0x4CDF, 0x000F, units=16)
     t2("MOVEM.L A0-A1,-(A7) / MOVEM.L (A7)+,A0-A1", 11, 0x48E7, 0x00C0, 0x4CDF, 0x0300, units=16, setup=lea_a01x)
     t2("LEA (8,A0,D1.L),A1", 4, 0x43F0, 0x1808, setup=lambda: (lea_a0(), emit(0x7204)))
-    t2("JMP to the next instruction (xxx).L + NOPless", 3, units=1) if False else None
+    # memory operands that do not read what the instruction before wrote
+    t2("ADD.L D0,(A0)+ (each a new long word)", 1, 0xD198, setup=lea_a0)
+    t2("ADDQ.L #1,(A0)+", 2, 0x5298, setup=lea_a0)
+    t2("MOVE.L D0,4(A0) / MOVE.L 8(A0),D1 (same line, other bytes)", 2, 0x2140, 4, 0x2228, 8, setup=lea_a0)
+    t2("MOVE.L D0,(A0)+ / MOVE.L (A1)+,D1 (other line)", 2, 0x20C0, 0x2219, setup=lea_a01x)
+    t2("MOVE.L D0,4(A0) / MOVE.L 4(A0),D1 (the same bytes)", 2, 0x2140, 4, 0x2228, 4, setup=lea_a0)
+    t2("MOVE.L D0,4(A0) / ADDQ.L #1,D2 / MOVE.L 4(A0),D1", 3, 0x2140, 4, 0x5282, 0x2228, 4, setup=lea_a0)
+    t2("MOVE.L D0,4(A0) / ADDQ / ADDQ / MOVE.L 4(A0),D1", 4, 0x2140, 4, 0x5282, 0x5283, 0x2228, 4, setup=lea_a0)
     emit(0x7E7F, 0x23C7, MARK >> 16, MARK & 0xFFFF)     # marker $7F: end of pass
     emit(0x5386)                                        # SUBQ.L #1,D6
     emit(0x6600, (top - (st["pc"] + 2)) & 0xFFFF)       # BNE.W top
