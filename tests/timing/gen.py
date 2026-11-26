@@ -108,6 +108,38 @@ def build(mode):
     test("MOVE.L (A0),(A1), other set", N, 1, lea_a01x, rep(N, 0x2290))
     test("MOVE.L D0,(A1) / MOVE.L (A0),D1, other set", N, 2, lea_a01x, rep(N, 0x2280, 0x2210))
     test("MOVE.L D0,(A1) / ADD.L D2,D3 / MOVE.L (A0),D1, other set", N, 3, lea_a01x, rep(N, 0x2280, 0xD682, 0x2210))
+    # Misaligned operands.  UM 4.2: a read takes one cache access when the
+    # operand lies inside a half-line (two long words) and two when it crosses
+    # a half-line or a line; a write inside a line takes one.  UM 10.1 leaves
+    # the timing to the reader: the figure here is one clock per extra access.
+    def lea_o(off): return lambda: emit(0x41F9, 0x0002, off)
+    test("misaligned MOVE.L (A0),D0, line+6 (two half-lines)", N, 2, lea_o(6), rep(N, 0x2010))
+    test("misaligned MOVE.L (A0),D0, line+14 (two lines)", N, 2, lea_o(14), rep(N, 0x2010))
+    test("misaligned MOVE.L D0,(A0), line+2 (one line)", N, 1, lea_o(2), rep(N, 0x2080))
+    test("misaligned MOVE.L D0,(A0), line+14 (two lines)", N, 2, lea_o(14), rep(N, 0x2080))
+    # the same across two lines that are not in the cache: the first pass
+    # ("cold") is the figure, later passes find them cached
+    test("cold: MOVE.L (A0),D0 across two lines / LEA 16(A0),A0", N, -1,
+         lambda: emit(0x41F9, 0x0003, 0x000E), rep(N, 0x2010, 0x41E8, 0x0010))
+    test("cold: MOVE.L D0,(A0) across two lines / LEA 16(A0),A0", N, -1,
+         lambda: emit(0x41F9, 0x0003, 0x800E), rep(N, 0x2080, 0x41E8, 0x0010))
+    def cp(src, dst): return lambda: emit(0x41F9, 0x0002, src, 0x43F9, 0x0002, 0x1040 + dst, 0x7063)
+    cploop = lambda: emit(0x22D8, 0x51C8, 0xFFFC)
+    test("loop: MOVE.L (A0)+,(A1)+ / DBRA (x100), other set", 100, 5, cp(0, 0), cploop)
+    test("loop: same, source +1 (UM 5.5)", 100, 6, cp(1, 0), cploop)
+    test("loop: same, destination +1 (UM 5.25)", 100, 5, cp(0, 1), cploop)
+    test("loop: same, both +1 (UM 5.75)", 100, 6, cp(1, 1), cploop)
+    test("loop: MOVE.B (A0)+,(A1)+ / DBRA (x100)", 100, 5, cp(0, 0), lambda: emit(0x12D8, 0x51C8, 0xFFFC))
+    # mixed reads and writes of cached memory
+    test("MOVE.L D0,(A0) / MOVE.L (A0),D1 (same long word)", N, 2, lea_a0, rep(N, 0x2080, 0x2210))
+    test("MOVE.L (A0),D0 / ADDQ.L #1,D0 / MOVE.L D0,(A0)", N, 3, lea_a0, rep(N, 0x2010, 0x5280, 0x2080))
+    test("MOVE.L (A0)+,D0 / MOVE.L D0,(A1)+, other set", N, 2, lea_a01x, rep(N, 0x2018, 0x22C0))
+    # a branch no predictor can learn: the low bit of a 32-bit LFSR
+    #   LSR.L #1,D1 / BCC.S +2 / EOR.L D2,D1 / DBRA D0   (UM: taken 7, not taken 9)
+    test("loop: LFSR-driven BCC (LSR/BCC/[EOR]/DBRA x100)", 100, 8,
+         lambda: emit(0x223C, 0xACE1, 0xACE1, 0x243C, 0x8020, 0x0003, 0x7063),
+         lambda: emit(0xE289, 0x6402, 0xB581, 0x51C8, 0xFFF8))
+    test("LEA 4(PC),A0 / JMP (A0)", 32, 5, nop, rep(32, 0x41FA, 0x0004, 0x4ED0))
     emit(0x7E7F, 0x23C7, MARK >> 16, MARK & 0xFFFF)     # marker $7F: end of pass
     emit(0x5386)                                        # SUBQ.L #1,D6
     emit(0x6600, (top - (st["pc"] + 2)) & 0xFFFF)       # BNE.W top
