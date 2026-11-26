@@ -17,6 +17,7 @@ integer tlines = 0;
 integer cyc = 0, cnt = 0;
 integer t_mark [0:127];
 integer t_first [0:127];
+reg [127:0] seen = 128'd0;      // (the first run of a test in the first pass: its cold time)
 integer pass = 0;
 integer nbus_i = 0, nbus_d = 0, nbus_w = 0;
 reg [8*32-1:0] prog;
@@ -64,7 +65,7 @@ always @(posedge clk) begin
                         t_mark[wdata[6:0]] <= cyc;
                         if (pass == TPASS && wdata[6:0] == 2*TRACE) tracing <= 1;
                         if (wdata[6:0] == 2*TRACE + 1) tracing <= 0;
-                        if (pass == 0) t_first[wdata[6:0]] <= cyc;
+                        if (pass == 0 && !seen[wdata[6:0]]) begin t_first[wdata[6:0]] <= cyc; seen[wdata[6:0]] <= 1'b1; end
                     end
                 end
                 else case (size)

@@ -156,7 +156,7 @@ localparam int QN = 8;            // (12: about 2% faster, 100 ALMs more)
 // The instruction cache's own geometry, in place of the package's (which
 // the data cache keeps): CSB 8, 16 Kbytes, the largest whose set stays in
 // the page offset (an experiment: does QuickDraw's ROM code miss at 8K?).
-localparam int CSB = 8;
+localparam int CSB = 6;
 localparam int CSH = CSB + 3;
 localparam int CTW = 28 - CSB;
 

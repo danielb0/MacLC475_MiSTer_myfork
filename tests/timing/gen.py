@@ -20,7 +20,14 @@ def build(mode):
     def test(name, units, um, setup, body, suite=1):
         if suite != SUITE: return
         i = len(tests)
+        # Each test runs twice in a row and the second run is the one timed
+        # (the bench keeps the last): its code is then in the instruction
+        # cache, 4 Kbytes as the MC68040's, which the whole program is not.
+        # The first run of the first pass is the "cold" column.
+        emit(0x7A01)                                    # MOVEQ #1,D5
+        again = st["pc"]
         setup(); marker(2*i); body(); marker(2*i+1)
+        emit(0x51CD, (again - (st["pc"] + 2)) & 0xFFFF) # DBRA D5,again
         tests.append((name, units, um))
     def rep(n, *ws):
         def f():

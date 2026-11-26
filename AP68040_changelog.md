@@ -192,3 +192,31 @@ bus, caches on, copyback); "UM" is the MC68040 User's Manual (M68040UM/AD).
   #,d16(An) 5.0 (2). The fetch side, not the data side.
 - **A memory-to-memory MOVE is two uops**: MOVE.L (An),(An) 2 clocks
   (UM 1). The forms the manual gives 2 clocks to are met.
+
+## 7. Both caches the MC68040's size: 4 Kbytes
+
+- **Documented:** MC68040UM section 4: each cache is four-way
+  set-associative, 64 sets of four 16-byte lines, 4 Kbytes.
+- **Before:** instruction cache 16 Kbytes (`ap68040_fetch.sv` CSB 8, "an
+  experiment"), data cache 8 Kbytes (`ap68040_pkg.sv` CSB 7).
+- **Change:** CSB 6 in both. No other change: the design takes CSB as a
+  constant, and entry 2's and 6's second lookup falls back at the last line
+  of a block, now 1 Kbyte.
+- **Effect:** more misses, as on the real processor. Instruction timing
+  with the code cached is unchanged.
+- **Bench:** the `tests/timing` program is larger than 4 Kbytes, so each
+  test now runs twice in a row and the second run is timed; the "cold"
+  column is the first run of the first pass.
+- **Checked:** `tests/memsweep` 360 runs pass (its operands were chosen to
+  collide at this size too); `tests/run_cpu040.sh` smoke, lc040, machine,
+  mmu, profile pass.
+
+## Notes from the board (2026-11-26, captures in local/shots/perf)
+
+- A RAM line read takes about 13 clocks on the board (3.27 a beat), where
+  `tests/timing`'s ideal memory answers a zero-wait 2-1-1-1 burst in 5: the
+  bench understates a miss's cost on the machine. The LC 475's own wait
+  states are not in Apple's developer note.
+- Norton's "Function" test read 1.07 of a Quadra 700 after entry 6 (1.01
+  before): a line-crossing store at 2 clocks is faster than the real
+  processor's. The manual gives the two cache accesses but no time.
