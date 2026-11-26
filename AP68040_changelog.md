@@ -58,3 +58,45 @@ bus, caches on, copyback); "UM" is the MC68040 User's Manual (M68040UM/AD).
 - **Not covered by a test:** bus snoops and interrupts arriving during the
   second lookup; a build's timing (the cache RAM address has one more
   multiplexer level).
+
+## 3. Instructions take the documented clocks at least (the pacer)
+
+- **Documented:** MC68040UM section 10, tables 10.5 and 10.6: the clocks an
+  instruction takes in the execute stage (the Execute column, interlocked
+  clocks added), cache hits and aligned operands.
+- **Before:** many instructions completed sooner than the 68040 can:
+  MULU.W in 3.8 clocks (14), MULS.L 3.8 (20), SWAP 1 (2), ASL #n 2 (3),
+  a DBRA loop 2.1 a pass (3), BSR + RTS 4.1 (7), a not-taken Bcc 1.5 (3).
+  DIVU.W was too slow: 35 clocks (27).
+- **Change:** `ap68040_pkg.sv` `um_clocks()` gives an instruction's
+  documented clocks from its operation word; `ap68040_useq.sv` puts the
+  figure on every uop (`uop.tmin`, 0 = none); `ap68040_backend.sv`,
+  parameter `PACE` (through `ap68040.sv`; default 0, set to 1 in
+  `rtl/cpu040.sv`), holds an instruction's last uop in EX until the count
+  of clocks since the previous instruction completed reaches the figure. A
+  taken Bcc and a looping DBcc take one clock less (2 and 3), from the
+  branch's real outcome. It is a floor: clocks the instruction spent anyway
+  count, and an instruction that redirects the front end as it leaves
+  (mispredicted branch, unfollowed jump, serializing instruction) is not
+  held. `rtl/cpu040.sv` also sets `DIV_STEPS(4)`, the divider's existing
+  four-bits-a-clock setting, so that the divides can meet their figures.
+- **Covered so far** (only tables read and checked against the manual):
+  Bcc, BRA, BSR, DBcc, JSR, JMP, RTS, RTD, RTR, LINK, UNLK, LEA, MULU,
+  MULS, DIVU, DIVS (word and long), ASL, ASR, LSL, LSR (register and
+  memory), SWAP, EXT.W, NOP.
+- **Not covered yet:** MOVE and the arithmetic group with indexed and
+  memory-indirect modes, ADDA, SUBA, CMPA, rotates, bit and bit-field
+  instructions, MOVEM, PEA, Scc, TAS, and the memory-indirect modes of the
+  covered instructions (taken at their brief-extension figure).
+- **After:** MULU.W 13.8, MULS.L 19.8, MOVE + DIVU.W 28 (UM 28), MOVE +
+  DIVU.L 45 (45), SWAP 2.0, ASL #2 3.0, LSR Dn 3.0, DBRA loop 3.1,
+  BNE not taken + MOVEQ 4.0 (4), BSR + RTS 7.0 (7), copy loop 5.1 (5),
+  LEA d16 2.0 (2).
+- **Off:** `PACE = 0` (and `DIV_STEPS(2)` for the earlier divider).
+- **Checked:** `tests/memsweep` gained multiplies, divides (word and long,
+  signed and unsigned), shifts, SWAP, EXT and calls and returns through the
+  stack: 360 runs pass, and an error planted in the model's long divide
+  fails every run. `tests/run_cpu040.sh` smoke, lc040, machine, mmu and
+  profile pass.
+- **Still slower than documented** (untouched by this entry): LINK about 5
+  clocks (3), NOP 15 (8), mispredicted and indirect branches, traps.

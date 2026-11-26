@@ -364,6 +364,7 @@ always_comb begin
 	nu.exr     = exc_mode;
 	nu.first  = src_first;
 	nu.last   = uw.last;
+	nu.tmin   = (exc_mode || src.exc != 8'd0) ? 6'd0 : um_clocks(src.opw);
 	nu.exc    = (src.exc != 8'd0) ? src.exc : 8'd0;
 
 	// destination

@@ -197,6 +197,73 @@ localparam logic [6:0]
 	OP_RTE   = 7'd61,  // RTE: SR = A, jump to B (throwaway frame: this RTE)
 	OP_IACKV = 7'd62;  // interrupt vector from the IACK data
 
+// The clocks an instruction takes in the MC68040's execute stage, from its
+// operation word: MC68040UM section 10 (10.5 Miscellaneous Integer Unit
+// Instruction Timings; 10.6 Integer Unit Instruction Timings), the Execute
+// column with its interlocked clocks added (nL + m = n + m), cache hits and
+// aligned operands.  0: not listed here -- the instruction is not paced.
+// For Bcc and DBcc the figure is the longer case (branch not taken; DBcc
+// with the condition true or the count expired): the back end takes a clock
+// off a taken Bcc and a DBcc that loops (2 and 3 clocks).
+// The effective address adds to the base figure only where the tables say
+// so; the memory-indirect modes ([bd,BR,Xn] and the like) are left at the
+// brief-extension figure.
+function automatic logic [5:0] um_clocks(input logic [15:0] w);
+	logic [2:0] m, r;
+	logic       idx, pcd, pci;
+	logic [5:0] t;
+	m   = w[5:3]; r = w[2:0];
+	idx = (m == 3'd6);                    // (d8,An,Xn) / (bd,An,Xn)
+	pcd = (m == 3'd7) && (r == 3'd2);     // (d16,PC)
+	pci = (m == 3'd7) && (r == 3'd3);     // (d8,PC,Xn)
+	t   = 6'd0;
+	if (w == 16'h4E71)                          t = 6'd8;    // NOP            1L + 7
+	else if (w == 16'h4E75)                     t = 6'd5;    // RTS            5
+	else if (w == 16'h4E74)                     t = 6'd6;    // RTD            1L + 5
+	else if (w == 16'h4E77)                     t = 6'd7;    // RTR            1L + 6
+	else if (w[15:3] == 13'b0100_1110_0101_0)   t = 6'd3;    // LINK.W         2L + 1
+	else if (w[15:3] == 13'b0100_1000_0000_1)   t = 6'd3;    // LINK.L
+	else if (w[15:3] == 13'b0100_1110_0101_1)   t = 6'd2;    // UNLK           1L + 1
+	else if (w[15:3] == 13'b0100_1000_0100_0)   t = 6'd2;    // SWAP           2
+	else if (w[15:3] == 13'b0100_1000_1000_0)   t = 6'd2;    // EXT.W          2
+	else if (w[15:8] == 8'h60)                  t = 6'd2;    // BRA            2
+	else if (w[15:8] == 8'h61)                  t = 6'd2;    // BSR            1L + 1
+	else if (w[15:12] == 4'h6)                  t = 6'd3;    // Bcc            2 taken, 3 not
+	else if (w[15:12] == 4'h5 && w[7:3] == 5'b11001)
+	                                            t = 6'd4;    // DBcc           3 looping, 4 else
+	else if (w[15:7] == 9'b0100_1110_1) begin               // JSR, JMP (the same figures)
+		t = (m == 3'd2) ? 6'd3 :                             //   (An)        2L + 1
+		    (m == 3'd5) ? 6'd4 :                             //   (d16,An)    3L + 1
+		    idx         ? 6'd6 :                             //   (d8,An,Xn)  6
+		    pcd         ? 6'd6 :                             //   (d16,PC)    5L + 1
+		    pci         ? 6'd7 : 6'd3;                       //   (d8,PC,Xn)  1L + 6; (xxx) 2L + 1
+	end
+	else if (w[15:12] == 4'h4 && w[8:6] == 3'b111) begin    // LEA
+		t = (m == 3'd5) ? 6'd2 :                             //   (d16,An)    1L + 1
+		    idx         ? 6'd4 :                             //   (d8,An,Xn)  4
+		    pcd         ? 6'd4 :                             //   (d16,PC)    3L + 1
+		    pci         ? 6'd5 : 6'd1;                       //   (d8,PC,Xn)  1L + 4; (An), (xxx) 1
+	end
+	else if (w[15:12] == 4'hC && w[7:6] == 2'b11)           // MULU.W 14, MULS.W 16
+		t = (w[8] ? 6'd16 : 6'd14) + (idx ? 6'd2 : pci ? 6'd4 : 6'd0);
+	else if (w[15:12] == 4'h8 && w[7:6] == 2'b11)           // DIVU.W, DIVS.W 27
+		t = 6'd27 + (idx ? 6'd3 : pci ? 6'd4 : 6'd0);
+	else if (w[15:6] == 10'b0100_1100_00)                   // MULU.L, MULS.L 20
+		t = 6'd20 + (idx ? 6'd2 : pci ? 6'd4 : 6'd0);
+	else if (w[15:6] == 10'b0100_1100_01)                   // DIVU.L, DIVS.L, DIVUL, DIVSL 44
+		t = 6'd44 + (idx ? 6'd3 : pci ? 6'd4 : 6'd0);
+	else if (w[15:12] == 4'hE && w[7:6] != 2'b11 && !w[4]) begin
+		// ASd, LSd on a data register (w[4:3]: 00 AS, 01 LS; rotates not
+		// listed here).  ASL 3 / 4 (immediate / register count), ASR, LSL,
+		// LSR 2 / 3
+		t = (w[3] == 1'b0 && w[8]) ? (w[5] ? 6'd4 : 6'd3) : (w[5] ? 6'd3 : 6'd2);
+	end
+	else if (w[15:11] == 5'b1110_0 && w[10] == 1'b0 && w[7:6] == 2'b11)
+		// ASd, LSd on memory (w[10:9]: 00 AS, 01 LS): ASL 3, the others 2
+		t = ((w[9] == 1'b0 && w[8]) ? 6'd3 : 6'd2) + (idx ? 6'd2 : 6'd0);
+	um_clocks = t;
+endfunction
+
 // D1's return stack pointer as an instruction found it, and what the
 // instruction did to it: a WB redirect puts it back (after the
 // instruction, or before it for a refetch), so wrong-path calls and
@@ -214,6 +281,7 @@ typedef struct packed {
 	ras_snap_t   ras;       // see ras_snap_t
 	logic        first;     // first uop of the instruction
 	logic        last;      // last uop: the instruction completes with it
+	logic  [5:0] tmin;      // the instruction's documented clocks (um_clocks; 0: none)
 	// execution
 	logic  [6:0] op;
 	logic  [1:0] sz;

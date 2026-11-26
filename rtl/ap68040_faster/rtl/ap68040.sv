@@ -23,6 +23,7 @@ module ap68040
 	parameter bit         DC1_ATC      = 0,      // DC1's own ATC port and tag compare (timing)
 	parameter bit         SKID         = 0,      // the skid register in front of AG (timing)
 	parameter int         DIV_STEPS    = 2,      // divide steps per cycle (2 or 4)
+	parameter bit         PACE         = 0,      // instructions take the MC68040's documented clocks at least
 	parameter bit         DUAL         = 1,      // dual issue: the second slot (ap68040_pkg s1_t)
 	parameter bit         BTIC         = 1,      // the fetch BTB's target words
 	parameter bit         DM_EARLY_TA  = 1,      // the DMU takes TA in its own clock (biu done_e)
@@ -305,7 +306,7 @@ s1_t         uq0s;
 logic        uo_rdy;
 
 ap68040_backend #(.HAS_FPU(HAS_FPU), .FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_PIPE), .EARLY_RES(EARLY_RES),
-                  .SKID(SKID), .DIV_STEPS(DIV_STEPS), .DUAL(DUAL)) be (
+                  .SKID(SKID), .DIV_STEPS(DIV_STEPS), .DUAL(DUAL), .PACE(PACE)) be (
 	.clk(clk), .nreset(nreset),
 	.in_v(uq_n != 2'd0), .in_u(uq0), .in_s(uq0s), .in_rdy(uo_rdy),
 	.redir_v(redir_v), .redir_pc(redir_pc), .flush(flush), .fe_flush(fe_flush),

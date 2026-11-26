@@ -31,6 +31,9 @@ module ap68040_backend
 	parameter bit         EARLY_RES = 1,
 	parameter bit         SKID      = 1,      // the skid register in front of AG
 	parameter int         DIV_STEPS = 2,      // divide steps per cycle
+	// Instructions complete no closer together than the MC68040's documented
+	// clocks (ap68040_pkg um_clocks, MC68040UM section 10).  0: off.
+	parameter bit         PACE = 0,
 	parameter bit         DUAL      = 1       // the second slot (ap68040_pkg s1_t)
 )(
 	input  logic        clk,
@@ -293,6 +296,7 @@ assign dfc  = dfc_r;
 // stall / advance (bubbles collapse: a stage moves into an empty one)
 //--------------------------------------------------------------------------
 logic wb_hold, ex_hold, dc2_hold, ag_hold;
+logic pace_hold;
 logic dbf_hold;
 logic stall_wb, stall_ex, stall_dc2, stall_dc1, stall_ag;
 
@@ -776,7 +780,8 @@ end endgenerate
 // operand stays off the stall path, and the exception goes a cycle later)
 assign ex_hold = (ex_v && ex_is_md && !md_z && !ex_fault && !md_done && !md_fin) ||
                  (ex_v && ex_slow && !ex_ph) ||
-                 (ex_v && ex_is_fp && !ex_fault && ex_u.exc == 8'd0 && fp_hold) || dbf_hold;
+                 (ex_v && ex_is_fp && !ex_fault && ex_u.exc == 8'd0 && fp_hold) || dbf_hold ||
+                 pace_hold;
 
 // DBcc period floor (the dbcc_floor input): a taken DBcc leaving EX loads
 // the counter with floor-1, and a DBcc in EX waits while it is nonzero, so
@@ -1403,6 +1408,35 @@ logic       eredir_pend, wb_eredir;
 wire        ex_early = ex_mispred && !ex_u.ser && !ex_sr_we &&
                        !(ex_u.last && (smc_pend || ex_smc)) && (ex_u.exc == 8'd0) &&
                        !ex_fault && (ex_xvec == 8'd0) && !ex_odd && !kill_now && !flush;
+
+// The pacer (PACE).  pace_cnt is the number of clocks since the previous
+// instruction's last uop left EX (1 in the clock after).  An instruction's
+// last uop waits in EX until that count reaches the instruction's
+// documented time, uop.tmin, so instructions complete at least that far
+// apart.  It is a floor: time the instruction spent anyway -- its own uops,
+// a cache miss, the refill after a redirect -- counts towards it, and an
+// instruction with no figure (tmin 0) is not held.  The hold commits
+// nothing (as the multiply/divide and DBcc holds): results are written on
+// adv_ex only, and a flush clears ex_v.
+// A taken Bcc and a DBcc that loops take a clock less than tmin (2 and 3:
+// MC68040UM 10.5), decided by the branch's real outcome in EX.
+// An instruction that redirects the front end as it leaves (a mispredicted
+// branch, a jump the front end could not follow, a serializing
+// instruction) is not held: the refill behind it is longer than its figure,
+// and holding it first would add to that.
+logic [5:0] pace_cnt;
+wire        pace_br   = (ex_u.br == BR_COND) && (ex_u.op == OP_BCC || ex_u.op == OP_DBCC);
+wire  [5:0] pace_lo   = pace_br ? ex_u.tmin - 6'd1 : ex_u.tmin;
+wire        pace_tgt  = PACE && ex_v && ex_u.last && !ex_fault && (ex_u.exc == 8'd0) &&
+                        (ex_u.tmin != 6'd0) &&
+                        !ex_mispred && !ex_u.ser && !ex_sr_we;
+assign pace_hold = pace_tgt && ((pace_cnt < pace_lo) ||
+                                (pace_br && !ex_taken && (pace_cnt < ex_u.tmin)));
+always_ff @(posedge clk) begin
+	if (!nreset || kill_now)           pace_cnt <= 6'd1;
+	else if (adv_ex && ex_u.last)      pace_cnt <= 6'd1;
+	else if (pace_cnt != 6'd63)        pace_cnt <= pace_cnt + 6'd1;
+end
 
 // a change of flow to an odd address is an address error at the
 // instruction (format $2, the address with A0 cleared), before any of its

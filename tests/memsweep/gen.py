@@ -12,6 +12,9 @@
 # the data cache may not hold (DTT1: noncachable), and are read back soon
 # after they are written.  Sizes are byte, word and long at any address.
 # Branches on memory data that no predictor can learn discard uops in flight.
+# Multiplies, divides, shifts, SWAP, EXT and calls and returns through the
+# stack are mixed in: the instructions the core paces to the MC68040's
+# documented clocks.
 # The model below is the 68040's: big-endian bytes, nothing else.
 import random, sys
 
@@ -67,8 +70,74 @@ def setreg(r, n, v):
     m = (1 << (8 * n)) - 1
     D[r] = (D[r] & ~m & 0xFFFFFFFF) | (v & m)
 
+def s32(v): return v - (1 << 32) if v & 0x80000000 else v
+def s16(v): return v - (1 << 16) if v & 0x8000 else v
+
+def arith():
+    """a register operation the core paces, or a call / return"""
+    k = rnd.randrange(12); r = rnd.randrange(6); s = rnd.randrange(6)
+    if k == 0:                                      # MULU.W Ds,Dr
+        emit(0xC0C0 | (r << 9) | s)
+        D[r] = ((D[r] & 0xFFFF) * (D[s] & 0xFFFF)) & 0xFFFFFFFF
+    elif k == 1:                                    # MULS.W Ds,Dr
+        emit(0xC1C0 | (r << 9) | s)
+        D[r] = (s16(D[r] & 0xFFFF) * s16(D[s] & 0xFFFF)) & 0xFFFFFFFF
+    elif k == 2:                                    # MULU.L / MULS.L Ds,Dr (32-bit product)
+        sg = rnd.randrange(2)
+        emit(0x4C00 | s, (r << 12) | (sg << 11))
+        D[r] = (D[r] * D[s]) & 0xFFFFFFFF
+    elif k == 3 and (D[s] & 0xFFFF):                # DIVU.W Ds,Dr
+        emit(0x80C0 | (r << 9) | s)
+        d = D[s] & 0xFFFF; q = D[r] // d
+        if q <= 0xFFFF: D[r] = ((D[r] % d) << 16) | q
+    elif k == 4 and (D[s] & 0xFFFF):                # DIVS.W Ds,Dr
+        emit(0x81C0 | (r << 9) | s)
+        d = s16(D[s] & 0xFFFF); a = s32(D[r])
+        q = abs(a) // abs(d); q = -q if (a < 0) != (d < 0) else q
+        rem = a - q * d
+        if -32768 <= q <= 32767: D[r] = ((rem & 0xFFFF) << 16) | (q & 0xFFFF)
+    elif k == 5 and D[s]:                           # DIVU.L / DIVS.L Ds,Dr (32 / 32)
+        sg = rnd.randrange(2)
+        if sg:
+            d = s32(D[s]); a = s32(D[r])
+            q = abs(a) // abs(d); q = -q if (a < 0) != (d < 0) else q
+            if not (-(1 << 31) <= q < (1 << 31)): return arith()
+        else:
+            q = D[r] // D[s]
+        emit(0x4C40 | s, (r << 12) | (sg << 11) | r)
+        D[r] = q & 0xFFFFFFFF
+    elif k == 6:                                    # ASd / LSd #n,Dr (long)
+        n = rnd.randrange(1, 9); left = rnd.randrange(2); ls = rnd.randrange(2)
+        emit(0xE080 | ((n & 7) << 9) | (left << 8) | (ls << 3) | r)
+        if left:  D[r] = (D[r] << n) & 0xFFFFFFFF
+        elif ls:  D[r] = D[r] >> n
+        else:     D[r] = (s32(D[r]) >> n) & 0xFFFFFFFF
+    elif k == 7:                                    # LSd Ds,Dr (count modulo 64)
+        left = rnd.randrange(2)
+        emit(0xE0A8 | (s << 9) | (left << 8) | r)
+        n = D[s] & 63
+        D[r] = ((D[r] << n) & 0xFFFFFFFF) if left else (D[r] >> n)
+    elif k == 8:                                    # SWAP Dr / EXT.W Dr
+        if rnd.randrange(2):
+            emit(0x4840 | r); D[r] = ((D[r] << 16) | (D[r] >> 16)) & 0xFFFFFFFF
+        else:
+            emit(0x4880 | r); setreg(r, 2, (D[r] & 0xFF) - (0x100 if D[r] & 0x80 else 0))
+    elif k == 9:                                    # BSR.W to the next instruction, the frame dropped
+        emit(0x6100, 0x0002)
+        wr(SP - 4, 4, pc[0]); emit(0x588F)          # ADDQ.L #4,A7
+    elif k == 10:                                   # PEA next(PC) / RTS
+        emit(0x487A, 0x0004, 0x4E75)
+        wr(SP - 4, 4, pc[0])
+    elif k == 11:                                   # LEA next(PC),A3 / JSR (A3), the frame dropped
+        emit(0x47FA, 0x0004, 0x4E93)
+        wr(SP - 4, 4, pc[0]); emit(0x588F)
+    else:
+        return arith()
+
+SP = 0x7F800
 def op():
     """emit one operation, apply it to the model; returns its words (already emitted)"""
+    if rnd.random() < 0.15: return arith()
     k = rnd.random(); n = rnd.choice([1, 2, 4, 4]); r = rnd.randrange(6)
     if k < 0.30:                                    # MOVE.s Dr,(d16,Aa)
         a, d, p = pick()
@@ -96,7 +165,7 @@ def op():
         D[r] = (D[r] + D[s]) & 0xFFFFFFFF
 
 # vectors, then the program
-put32(0, 0x00008000); put32(4, 0x00001000)
+put32(0, 0x0007F800); put32(4, 0x00001000)   # SSP (its own page), PC
 if mode == "cb":
     emit(0x203C, 0x0000, 0xC020, 0x4E7B, 0x0006)    # DTT0: $00xxxxxx copyback
 if mode == "mm":
