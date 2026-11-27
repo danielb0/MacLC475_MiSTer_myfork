@@ -9,7 +9,7 @@
 #           +BWAITS=n      extra clocks before each later beat of a line
 #           +TRACE=n       per-clock pipeline trace of test n (0-based line of tests.txt)
 #           +TPASS=p +TMAX=lines   (the trace follows the second, timed run of the test)
-# SUITE=n (environment): 1 the first set, 2 the rest of the tables, 3 the instruction supply
+# SUITE=n (environment): 1 the first set, 2 the rest of the tables, 3 the instruction supply, 4 the sweep
 #           (instruction length, branches, calls and returns)
 # PASSES=n (environment) sets how often the whole program runs; the last pass is reported.
 # Output: RESULT lines "warm clocks|units|UM clocks per unit|first-pass clocks|name",

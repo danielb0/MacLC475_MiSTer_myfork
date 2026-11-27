@@ -654,7 +654,13 @@ always_ff @(posedge clk) begin
 	lp_mp   <= ex_mispred;
 end
 assign lp_we = lp_we_q && !flush;
-assign dm_noalloc = (ag_u.mfc == MFC_SUP) && !ag_m1;
+// Exception stacking, RTE's unstacking and the vector fetch are ordinary
+// data accesses: on a miss they fill the line as any other (MC68040UM
+// gives the data cache no exception for them).  The donor answered a miss
+// from the bus and left the line out of the cache (MFC_SUP && !ag_m1), so
+// a frame on a stack line not yet cached cost a bus cycle a word, written
+// and read back, at every exception.
+assign dm_noalloc = 1'b0;
 // A level-7 interrupt's handler fetch (the routine's last uop: the vector
 // read, cond 15, a branch to the loaded address) reads past the data
 // cache: a system's NMI monitor answers that read itself (the Amiga's
@@ -1834,6 +1840,15 @@ always_comb begin
 end
 
 // the return stack after the instruction at WB
+// D1's return stack as the last completed instruction left it.  The uops
+// of an exception's routine carry no snapshot (they come from no decode),
+// so its redirect to the handler restored nothing: the calls and returns
+// D1 had decoded past the trapping instruction, and from the stale queue
+// during the routine, stayed counted, and every return to a frame open at
+// the exception was mispredicted.  A redirect without a snapshot restores
+// this.
+logic       cr_v;
+logic [6:0] cr_s;
 function automatic logic [6:0] ras_after(input ras_snap_t r);
 	case (r.k)
 		2'd1:    ras_after = {r.tp + 3'd1, (r.n == 4'd8) ? 4'd8 : r.n + 4'd1};
@@ -1931,6 +1946,8 @@ always_ff @(posedge clk) begin
 		redir_pc <= 32'd0;
 		ras_rtp <= '0;
 		ras_rn <= '0;
+		cr_v <= 1'b0;
+		cr_s <= '0;
 	end
 	else begin
 		//------------------------------------------------------------------
@@ -2121,7 +2138,8 @@ dc1_a1  <= ag_s.agop ? ag1_val :
 				fe_flush    <= 1'b1;
 				redir_v     <= 1'b1;
 				redir_pc    <= ex_next;
-				ras_rv      <= ex_u.ras.v;
+				ras_rv      <= ex_u.ras.v || cr_v;
+				if (!ex_u.ras.v) {ras_rtp, ras_rn} <= cr_s;
 				eredir_pend <= 1'b1;
 			end
 			if (ex_u.last) smc_pend <= 1'b0;
@@ -2287,14 +2305,18 @@ dc1_a1  <= ag_s.agop ? ag1_val :
 					fe_flush <= 1'b1;
 					redir_v  <= 1'b1;
 					redir_pc <= wb_redir_pc;
-					ras_rv   <= wb_u.ras.v;
-					{ras_rtp, ras_rn} <= ras_after(wb_u.ras);
+					ras_rv   <= wb_u.ras.v || cr_v;
+					{ras_rtp, ras_rn} <= wb_u.ras.v ? ras_after(wb_u.ras) : cr_s;
 				end
 				// the front file restarts from the back one (fv cleared below)
 				ccr_f <= wb_sr_we ? wb_sr_new[4:0] : wb_ccr;
 			end
 			if (wb_bound) trace_defer <= 1'b0;
 			if (wb_bound) rt_armed <= 1'b0;
+			if (wb_bound && wb_u.ras.v) begin
+				cr_v <= 1'b1;
+				cr_s <= ras_after(wb_u.ras);
+			end
 			if (wb_bound) begin
 				// RTE of a format $7 frame with CM arms the continuation of
 				// the MOVEM it returns to; any other instruction ends it

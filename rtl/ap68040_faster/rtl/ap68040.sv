@@ -404,6 +404,7 @@ logic  [2:0] ras_rtp;
 logic  [3:0] ras_rn;
 logic  [2:0] d_ras_tp;
 logic  [3:0] d_ras_n;
+logic        d_ras_xp;
 pd_t         pd0, pd0_n;
 logic  [3:0] qcnt;
 logic [31:0] qpc;
@@ -428,7 +429,7 @@ ap68040_fetch #(.BTIC(BTIC), .HLF(HLF), .S1_CLASSES(S1_CLASSES), .S1_LDMASK(S1_L
 	.q_odd(q_odd),
 	.btb_we(btb_we), .btb_wi(btb_wi), .btb_wv(btb_wv), .btb_wtag(btb_wtag),
 	.btb_wslot(btb_wslot), .btb_wkind(btb_wkind), .btb_wtgt(btb_wtgt),
-	.d_ras(d_ras), .d_ras_tp(d_ras_tp), .d_ras_n(d_ras_n),
+	.d_ras(d_ras), .d_ras_tp(d_ras_tp), .d_ras_n(d_ras_n), .d_ras_xp(d_ras_xp),
 	.iw_req(iw_req), .iw_va(iw_va), .iw_fc2(iw_fc2), .iw_done(iw_done),
 	.iatc_wr(iatc_wr), .iatc_wla(iatc_wla), .iatc_wfc2(iatc_wfc2), .iatc_went(iatc_went),
 	.iatc_flush_all(iatc_flush_all), .iatc_flush_page(iatc_flush_page),
@@ -447,7 +448,7 @@ assign b_wdata[1] = '0;
 
 ap68040_decode #(.HAS_FPU(HAS_FPU), .LOOP_PRED(LOOP_PRED), .DUAL(DUAL), .S1_LDTK(S1_LDTK)) dec (
 	.clk(clk), .nreset(nreset), .flush(fe_flush), .dbg_d(dbg_d), .dbg_pd(dbg_pd),
-	.ras_rv(ras_rv), .ras_rtp(ras_rtp), .ras_rn(ras_rn),
+	.ras_rv(ras_rv), .ras_rtp(ras_rtp), .ras_rn(ras_rn), .redir_v(redir_v), .redir_pc(redir_pc),
 	.win(win), .win_flt(win_flt), .win_fdem(win_fdem), .win_fatc(win_fatc),
 	.win_bt(win_bt), .win_s1(win_s1), .bt_tgt(bt_tgt),
 	.pd0(pd0), .pd0_n(pd0_n), .qcnt(qcnt), .qpc(qpc), .q_odd(q_odd),
@@ -458,7 +459,7 @@ ap68040_decode #(.HAS_FPU(HAS_FPU), .LOOP_PRED(LOOP_PRED), .DUAL(DUAL), .S1_LDTK
 	.lp_we(lp_we), .lp_wa(lp_wa), .lp_tk(lp_tk), .lp_mp(lp_mp),
 	.btb_we(btb_we), .btb_wi(btb_wi), .btb_wv(btb_wv), .btb_wtag(btb_wtag),
 	.btb_wslot(btb_wslot), .btb_wkind(btb_wkind), .btb_wtgt(btb_wtgt),
-	.ras_o(d_ras), .ras_tp_o(d_ras_tp), .ras_n_o(d_ras_n)
+	.ras_o(d_ras), .ras_tp_o(d_ras_tp), .ras_n_o(d_ras_n), .ras_xp(d_ras_xp)
 );
 
 ap68040_useq #(.HAS_FPU(HAS_FPU), .DUAL(DUAL)) useq (

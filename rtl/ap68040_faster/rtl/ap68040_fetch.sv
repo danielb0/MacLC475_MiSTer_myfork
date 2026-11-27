@@ -118,6 +118,7 @@ module ap68040_fetch
 	input  logic [30:0] d_ras,        // D1's return stack, its top entry: the
 	input  logic  [2:0] d_ras_tp,     // ... fetch's pointer and top entry are
 	input  logic  [3:0] d_ras_n,      // ... resynchronized on every redirect
+	input  logic        d_ras_xp,     // ... and when D1 pops a spent entry after one
 
 	// DMU: table walks for the I-ATC, I-ATC maintenance, cache invalidation
 	output logic        iw_req,
@@ -1137,6 +1138,13 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 		// end (the entry is installed); a line fill completes and is
 		// installed; a cache-inhibited read completes and is discarded.
 		//------------------------------------------------------------------
+		if (d_ras_xp) begin
+			frw  = 1'b1;
+			frwa = d_ras_tp;
+			frwd = d_ras;
+			fras_tp <= d_ras_tp;
+			fras_n  <= d_ras_n;
+		end
 		if (redir_any) begin
 			cnt   <= '0;
 			f2_n  <= '0;

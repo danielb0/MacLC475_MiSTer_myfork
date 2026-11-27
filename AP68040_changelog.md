@@ -351,3 +351,87 @@ Clocks per instruction, code cached, ideal memory; the manual's figure first.
   5.12, `BRA.S` + 3-word instruction 3.02 -> 2.98, `BSR.W / RTS` 6.97 -> 7.06.
 - **Verified:** tests/timing sets 1-3, run_cpu040 smoke/lc040/machine/mmu/
   profile, memsweep 360 of 360. Not yet on the board.
+
+## Sweep for clocks lost by accident (2026-11-27, tests/timing SUITE=4)
+
+Entry 11's bug prompted a sweep of the whole CPU for the same family:
+lists and counters that fill, predictions and cached results thrown away,
+waits wider than their cause. Three read-only audits listed candidates;
+each got a bench case, and only what the bench confirmed was changed
+(entries 12-16). Clocks, the manual's figure first.
+
+Not borne out: a loop's place in a half-line (3.12 a turn at all four);
+a miss that evicts a modified line (the push's bus time, about 5 clocks,
+and no more); the ADDA and SUBA rows of `um_clocks` (the manual's tables
+10-13 and 10-27 do differ: ADDA Dn 2, An and # 1; SUBA Dn 1, An and # 2).
+Left open: a store miss costs 2.5 clocks more than a load miss and a
+read-modify-write miss 3.3 more; the second use of a pointer just loaded
+loses a clock; the store buffer lets a read pass only one queued write.
+
+## 12. Exception stacking and the vector fetch use the data cache
+
+- **Before:** the donor marked them no-allocate (`dm_noalloc`: MFC_SUP).
+  With the frame's stack line not in the cache every word of the frame
+  went to the bus, came back from the bus at RTE, and the line never
+  entered the cache; the vector's line likewise.
+- **Documentation:** MC68040UM 8 (stack frames: long-word transfers, an
+  aligned stack pointer "greatly enhances exception processing
+  performance") gives the data cache no exception for them.
+- **Change** (`ap68040_backend.sv`): `dm_noalloc` is 0. The level-7
+  vector's read past the cache (`dm_pastc`) is untouched.
+- **After:** `TRAP #0` + `RTE` 63 -> 56 (29); A-line + handler 66 -> 58
+  (31); the same trap four calls deep, its frame on a new line, 140 -> 100.
+
+## 13. The return stack is restored after an exception
+
+- **Before:** the uops of an exception's routine carry no return-stack
+  snapshot, so the redirect to the handler restored nothing. The calls and
+  returns D1 had decoded past the trapping instruction stayed counted, and
+  every return to a frame open at the exception was mispredicted.
+- **Change** (`ap68040_backend.sv` `cr_v`, `cr_s`): the stack as the last
+  completed instruction left it is kept, and a redirect whose uop has no
+  snapshot restores that.
+- **After:** `TRAP #0 / RTS` four calls deep 108 -> 88 (with entry 12: 160
+  before both; 84 would be the trap's own cost).
+
+## 14. A return the stack did not see spends its entry
+
+- **Before:** `MOVEA.L (A7)+,A0 / JMP (A0)` (and RTD) left the call's
+  entry on the stack; every enclosing RTS then took the entry of the
+  frame inside it and was mispredicted. Four calls deep: 64.5 for 27.
+- **Change** (`ap68040_decode.sv` `ras_xp`, `ap68040_fetch.sv`): a
+  back-end redirect to the address on top of the restored stack pops it, a
+  clock after the redirect, in D1's stack and the fetch's.
+- **After:** 36.9 (the jump through a register still redirects late: the
+  sweep's item C). One call deep is unchanged at 19.4 for 6.
+- The MC68040 has no return stack: these two entries only stop this
+  core's from costing more than the manual's figures.
+
+## 15. PEA and JSR (An) no longer wait for a MOVE's scratch register
+
+- **Before:** `PEA` and `JSR (An)/(d16,An)` form their address in T0 at
+  AG; a memory-to-memory `MOVE` before them loads T0 at EX, and AG waits
+  for an older EX writer of the register it updates. 2 clocks, a false
+  dependency: `MOVE.L 8(A6),-(A7) / PEA 12(A6) / ADDQ.L #8,A7` 7 for 5.
+- **Change** (`gen/ap68040_ucode_init.svh`, `gen/ap68040_ucode_rom.svh`,
+  words 27, 28, 90, 91): they use T4, which only RTE and the FPU's moves
+  write. Patched in the generated tables: `tools/ucode.py` is not in this
+  repository, so the generator needs the same change upstream.
+- **After:** 5.
+
+## 16. A load beside a modified operand is compared by bytes
+
+- **Before:** a load waited for an older read-modify-write (`ADDQ.L
+  #1,(A0)`) to any byte of its 16-byte line (`st_byte`, "RMW by the
+  line"), 2 clocks. A plain store was already compared by bytes.
+- **Change** (`ap68040_dmu.sv`): an unlocked RMW writes in WB as a store
+  does, by the same byte mask, and is compared the same way; a locked one
+  (TAS, CAS) keeps the line.
+- **After:** `ADDQ.L #1,(A0) / MOVE.L 4(A0),D0` 4.03 -> 3.02 (the clock
+  left is the RMW on the bytes it wrote the turn before); `ADD.L
+  D0,(A0)+` over successive long words 2.53 -> 1.03 (1); `ADDQ.L
+  #1,(A0)+` 2.77 -> 2.02.
+
+Entries 12-16 verified together: tests/timing sets 1-4 (nothing under its
+figure that was not before), run_cpu040 smoke/lc040/machine/mmu/profile,
+memsweep 360 of 360. Not yet on the board.

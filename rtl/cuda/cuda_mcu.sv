@@ -152,7 +152,15 @@ assign pc_out = (pc_latch & pc_ddr) | (pc_in & ~pc_ddr);
 always @* begin
     cpu_rdata = 0;
     if (live_pram) cpu_rdata = cpu_addr[0] ? pram_hi[cpu_addr[7:1]] : pram_lo[cpu_addr[7:1]];
-    else if (ram_sel) cpu_rdata = ram[ram_addr];
+    // 341S0788 keeps "the clock has been set" in bit 4 of $A1: only its
+    // set-time command sets it ($186D), a cold start clears it, and the
+    // command at $1A0C reports it to the Mac, whose system software asks at
+    // startup and shows "the clock is wrong" when it is clear.  The time
+    // seeded from the HPS goes straight into $AB-$AE, past that command, so
+    // the flag reads set from then on (the firmware's own writes of $A1 keep
+    // the bit: masks $90, $10, $9A).
+    else if (ram_sel) cpu_rdata = ram[ram_addr] |
+        ((time_initialized && cpu_addr == 13'h00A1) ? 8'h10 : 8'h00);
     else if (cpu_addr >= 13'h0F00) cpu_rdata = rom_data;
     else begin
         case (cpu_addr)

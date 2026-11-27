@@ -37,6 +37,8 @@ module ap68040_decode
 	input  logic        ras_rv,         // ... with the return stack to restore
 	input  logic  [2:0] ras_rtp,
 	input  logic  [3:0] ras_rn,
+	input  logic        redir_v,        // the redirect's target (ras_xp, below)
+	input  logic [31:0] redir_pc,
 
 	input  logic [15:0] win [8],
 	input  logic  [7:0] win_flt,
@@ -86,7 +88,8 @@ module ap68040_decode
 	output logic [30:0] btb_wtgt,
 	output logic [30:0] ras_o,        // the return stack's top, for the fetch's
 	output logic  [2:0] ras_tp_o,
-	output logic  [3:0] ras_n_o
+	output logic  [3:0] ras_n_o,
+	output logic        ras_xp          // the top was popped a clock after a redirect
 );
 
 `include "gen/ap68040_dec_pla.svh"
@@ -789,8 +792,8 @@ wire  [1:0] btb_kind = rcall ? 2'd1 : rret ? 2'd2 : 2'd0;
 always_comb begin
 	// a back-end redirect resynchronizes the fetch's stack from the
 	// restored pointer (its pointer and the top entry)
-	ras_tp_o = ras_rv ? ras_rtp : ras_tp;
-	ras_n_o  = ras_rv ? ras_rn  : ras_n;
+	ras_tp_o = ras_rv ? ras_rtp : ras_xp ? ras_tp - 3'd1 : ras_tp;
+	ras_n_o  = ras_rv ? ras_rn  : ras_xp ? ras_n - 4'd1  : ras_n;
 	ras_o    = ras_top[31:1];
 end
 
@@ -902,6 +905,7 @@ always_ff @(posedge clk) begin
 		part_ret   <= 1'b0;
 		part_fpg   <= 1'b0;
 		ras_tp     <= '0;
+		ras_xp     <= 1'b0;
 		ras_n      <= '0;
 	end
 	else begin
@@ -1003,6 +1007,17 @@ always_ff @(posedge clk) begin
 				btb_wkind  <= btb_kind;
 				btb_wtgt   <= ntarget[31:1];
 			end
+		end
+		// A back-end redirect to the address on top of the restored stack
+		// is a return the stack did not see as one (MOVEA.L (A7)+,A0 /
+		// JMP (A0), RTD, or an RTS whose entry lay under such a leftover):
+		// the entry is spent.  Left there, it shifted the stack by one and
+		// every enclosing RTS was mispredicted.  It goes a clock after the
+		// redirect (the queue is empty then), and the fetch's stack with it.
+		ras_xp <= flush && redir_v && ras_rv && ras_rn != 4'd0 && ras_top[31:1] == redir_pc[31:1];
+		if (ras_xp) begin
+			ras_tp <= ras_tp - 3'd1;
+			ras_n  <= ras_n - 4'd1;
 		end
 		if (flush) begin
 			rq_n       <= 2'd0;

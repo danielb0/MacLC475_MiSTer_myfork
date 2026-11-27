@@ -28,8 +28,8 @@ function automatic uword_t ucode_rom(input logic [9:0] a);
 		10'd24: ucode_rom = 120'h2471d80000010000000;  // QUICK_A.0
 		10'd25: ucode_rom = 120'h2471e00000010000000;  // QUICK_SA.0
 		10'd26: ucode_rom = 120'h2801800000010000000;  // LEA.0
-		10'd27: ucode_rom = 120'h280ac00000000000000;  // PEA.0
-		10'd28: ucode_rom = 120'hd8002b0000c00000004010000000;  // PEA.1
+		10'd27: ucode_rom = 120'h280bc00000000000000;  // PEA.0  (T0 -> T4: AP68040_changelog 15)
+		10'd28: ucode_rom = 120'hd8002f0000c00000004010000000;  // PEA.1  (T0 -> T4: AP68040_changelog 15)
 		10'd29: ucode_rom = 120'h103e00;  // MOVEA.0
 		10'd30: ucode_rom = 120'h1c01800000010000000;  // MOVEA.1
 		10'd31: ucode_rom = 120'hc000010068000000000010000000;  // MOVEA.2
@@ -91,8 +91,8 @@ function automatic uword_t ucode_rom(input logic [9:0] a);
 		10'd87: ucode_rom = 120'hd8000e0000c00000004050000000;  // BSR.0
 		10'd88: ucode_rom = 120'h250100001450000000000030000000;  // DBCC.0
 		10'd89: ucode_rom = 120'h8002800000000070000000;  // JMP.0
-		10'd90: ucode_rom = 120'h280ac00000000000000;  // JSR.0
-		10'd91: ucode_rom = 120'hd8000eac00c000000040b0000000;  // JSR.1
+		10'd90: ucode_rom = 120'h280bc00000000000000;  // JSR.0  (T0 -> T4: AP68040_changelog 15)
+		10'd91: ucode_rom = 120'hd8000ebc00c000000040b0000000;  // JSR.1  (T0 -> T4: AP68040_changelog 15)
 		10'd92: ucode_rom = 120'hd8000e8000c00000004050000000;  // JSR_K.0
 		10'd93: ucode_rom = 120'hd8001b0001000000002090000000;  // RTS.0
 		10'd94: ucode_rom = 120'hd8001b02b14c0000002000000000;  // RTD.0

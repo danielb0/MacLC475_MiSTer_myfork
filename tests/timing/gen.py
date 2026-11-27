@@ -269,6 +269,57 @@ def build(mode):
     t3("LEA 4(PC),A0 / JMP (A0)", 5, 0x41FA, 0x0004, 0x4ED0, units=32)
     test("loop: MOVE.L #imm,D1 / DBRA (x100)", 100, 4, lambda: emit(0x7063),
         lambda: emit(0x223C, 0x1234, 0x5678, 0x51C8, 0xFFF8), suite=3)
+    # The fourth set: structures that fill, wrap or are thrown away (a sweep
+    # for clocks lost by accident, not by design).
+    test("(empty: marker overhead)", 1, 0, nop, nop, suite=4)
+    def stub(a, *ws):
+        for i, w in enumerate(ws): put16(a + 2*i, w)
+    def chain(base, leaf):                              # three levels of BSR.W / RTS above the leaf
+        t = leaf
+        for i in range(3):
+            a = base + 8*i
+            stub(a, 0x6100, (t - (a + 2)) & 0xFFFF, 0x4E75); t = a
+        return t
+    stub(0x3A0, 0x4E40, 0x4E75)                         # TRAP #0; RTS
+    stub(0x3B0, 0x4E40, *([0x7400] * 16), 0x4E75)       # TRAP #0; 16 x MOVEQ; RTS
+    stub(0x3E0, 0x205F, 0x4ED0)                         # MOVEA.L (A7)+,A0; JMP (A0)
+    c_rts = chain(0x400, 0x380); c_trap = chain(0x420, 0x3A0)
+    c_trpp = chain(0x440, 0x3B0); c_jmp = chain(0x460, 0x3E0)
+    def calls(tgt, n=16):
+        def f():
+            for _ in range(n): emit(0x6100, (tgt - (st["pc"] + 2)) & 0xFFFF)
+        return f
+    test("calls 4 deep, leaf RTS", 16, 28, nop, calls(c_rts), suite=4)
+    test("calls 4 deep, leaf TRAP #0 / RTS (UM 28 + 29)", 16, 57, nop, calls(c_trap), suite=4)
+    test("calls 4 deep, leaf TRAP #0 / 16 x MOVEQ / RTS (UM 28 + 29 + 16)", 16, 73, nop, calls(c_trpp), suite=4)
+    test("calls 4 deep, leaf MOVEA.L (A7)+,A0 / JMP (A0)", 16, 27, nop, calls(c_jmp), suite=4)
+    test("call 1 deep, leaf TRAP #0 / RTS (UM 7 + 29)", 16, 36, nop, calls(0x3A0), suite=4)
+    test("call 1 deep, leaf MOVEA.L (A7)+,A0 / JMP (A0)", 16, 6, nop, calls(0x3E0), suite=4)
+    # a three-word loop at each place in a half-line
+    for off in (0, 2, 4, 6):
+        def su(off=off):
+            while (st["pc"] + 10) % 8 != off: emit(0x7800)
+        test("loop: SUBQ.L #1,D0 / BNE.W (x100), loop at +%d in the half-line" % off, 100, 3, su,
+             lambda: emit(0x7064, 0x5380, 0x6600, 0xFFFC), suite=4)
+    # data-cache misses: 256 lines at $30000 after 512 lines at $20000 were
+    # read (the victims clean) or written (the victims dirty)
+    def fillc(op):
+        return lambda: emit(0x41F9, 0x0002, 0x0000, 0x323C, 0x01FF, op, 0x41E8, 0x0010, 0x51C9, 0xFFF8)
+    def walk(op):
+        return lambda: emit(0x43F9, 0x0003, 0x0000, 0x323C, 0x00FF, op, 0x43E9, 0x0010, 0x51C9, 0xFFF8)
+    for nm, f in (("clean", 0x2010), ("dirty", 0x2080)):
+        test("miss, %s victim: MOVE.L (A1),D0 / LEA 16(A1),A1 / DBRA" % nm, 256, 6, fillc(f), walk(0x2011), suite=4)
+        test("miss, %s victim: MOVE.L D0,(A1) / LEA / DBRA" % nm, 256, 6, fillc(f), walk(0x2280), suite=4)
+        test("miss, %s victim: ADDQ.L #1,(A1) / LEA / DBRA" % nm, 256, 6, fillc(f), walk(0x5291), suite=4)
+    def t4(name, um, *ws, units=N, setup=nop): test(name, units, um, setup, rep(units, *ws), suite=4)
+    t4("ADDQ.L #1,(A0) / MOVE.L 4(A0),D0 (same line, other bytes)", 2, 0x5290, 0x2028, 4, setup=lea_a0)
+    t4("MOVE.L D1,(A0) / MOVE.L 4(A0),D0 (same line, other bytes)", 2, 0x2081, 0x2028, 4, setup=lea_a0)
+    a6 = lambda: emit(0x4DF9, 0x0002, 0x0000)
+    t4("MOVE.L 8(A6),-(A7) / PEA 12(A6) / ADDQ.L #8,A7", 5, 0x2F2E, 8, 0x486E, 12, 0x508F, setup=a6)
+    t4("MOVE.L D0,-(A7) / PEA 12(A6) / ADDQ.L #8,A7", 4, 0x2F00, 0x486E, 12, 0x508F, setup=a6)
+    ptr = lambda: (lea_a0(), emit(0x2088))
+    t4("MOVEA.L (A0),A1 / MOVE.L (A1),D0 / MOVE.L 4(A1),D1", 3, 0x2250, 0x2011, 0x2229, 4, setup=ptr)
+    t4("MOVEA.L (A0),A1 / MOVE.L (A1),D0 / MOVEQ / MOVE.L 4(A1),D1", 4, 0x2250, 0x2011, 0x7400, 0x2229, 4, setup=ptr)
     emit(0x7E7F, 0x23C7, MARK >> 16, MARK & 0xFFFF)     # marker $7F: end of pass
     emit(0x5386)                                        # SUBQ.L #1,D6
     emit(0x6600, (top - (st["pc"] + 2)) & 0xFFFF)       # BNE.W top

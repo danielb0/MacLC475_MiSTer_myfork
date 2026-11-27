@@ -804,12 +804,14 @@ wire ns_rd = (PA_NS_MASK != 32'h0) && FAST_BUS && (m2.r.mem == M_LD) && !m2.spli
              ((m2.x.pa & PA_NS_MASK) == PA_NS_MATCH) &&
              !(m3.r.v && m3.r.mem != M_LD) && !(m4.r.v && m4.r.mem != M_LD);
 // the fast load (never split) waits only for a store whose bytes it reads:
-// a plain store within one line is compared by bytes, anything else (RMW,
-// split, MOVE16) by the line
+// a plain store within one line is compared by bytes, anything else (a
+// locked RMW, split, MOVE16) by the line.  (An unlocked RMW writes in WB as
+// a store does, by the same byte mask: compared by the line, a load of the
+// bytes beside a counter just incremented waited 2 clocks.)
 wire [15:0] m2_bm = bmask(m2.r.a[3:0], nbytes(m2.r.msz));
 function automatic logic st_byte(input mrec_t m);
 	st_byte = st_line(m, m2_line) &&
-	          (m.r.mem == M_RMW || m.split || m.r.msz == SZ_Q ||
+	          ((m.r.mem == M_RMW && m.r.lock) || m.split || m.r.msz == SZ_Q ||
 	           (bmask(m.x.pa[3:0], nbytes(m.r.msz)) & m2_bm) != 16'd0);
 endfunction
 wire hzf = st_byte(m3) || st_byte(m4);
