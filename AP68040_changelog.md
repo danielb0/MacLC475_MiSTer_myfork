@@ -632,3 +632,46 @@ LC 475's RAM timing; the estimate noted above is 10 (4-2-2-2).
 - **Verified:** tests/timing sets 1-4; run_cpu040 smoke, lc040, machine,
   mmu, profile; memsweep 360 of 360. Not compiled yet (to go with the next
   change).
+
+## 25. A load's line fill answers it at its own beat
+
+- **Documented:** MC68040UM 4.6.1: the line read buffer holds each beat,
+  "where it is immediately available to the IU"; "during the period
+  required to fill the buffer, other IU accesses that hit in the cache
+  are supplied data". The 68040's line read is critical long word first.
+- **Before:** a load that missed waited for the whole line: its fill
+  answered it at the last beat. On the board, beats after the first take
+  about 2.8 clocks each, so the load waited about 8 clocks for words it did
+  not need, and DC1 was held (the engine had the cache's ports, `steal`)
+  until the engine went idle, so nothing behind the load moved either.
+- **Change** (`ap68040_dmu.sv`, parameter `EARLY_LD`, default 1):
+  - The beat that completes a load's bytes answers it (its own fill, not
+    split, no TCI so far, the victim's steps done, no pending push error).
+    The engine gives the cache's read ports back then and stays on the
+    bus; the line is installed at the last beat as before (or through
+    E_FILL_INS), without answering again. A bus error on a later beat gives
+    no exception and allocates nothing (7.6.1), as before.
+  - While it waits, the engine counts as quiet: DC1 lookups go on, and
+    loads that hit another line take the fast path. A lookup of the fill's
+    set -- its own line or, for an operand across a line, the next --
+    waits until the install has landed (a clock after it, `e_ig`), then
+    hits as before. Stores still wait for the engine (`wb_fast` needs it
+    idle).
+  - A line installed in DC2's set after its lookup spends that lookup (its
+    job looks again, E_S_XL) rather than filling the line a second time.
+- **After** (`tests/timing` SUITE=4; ideal memory, then +WAITS=4
+  +BWAITS=1, about the board's beats): a load miss stream 10.8 -> 9.5 and
+  17.7 -> 14.8 clocks a turn; with a dirty victim 13.6 -> 13.1 and 21.0
+  -> 19.5; a miss followed by its use and six instructions 16.8 -> 15.8 and
+  21.5 -> 17.3; a second load from the line just filled unchanged. Excess
+  over the manual on the 168 cases 275.6 -> 273.4; none under its figure.
+- **Left:** an access to the line being filled waits for the install; the
+  68040 serves it from the line buffer as its long word arrives.
+- **Found on the way:** without the last two rules the memory sweep failed
+  20 of 360 runs (a second fill of a line already there; an operand
+  crossing into the fill's set read as its tags were written).
+- **Off:** `EARLY_LD = 0`.
+- **Verified:** tests/timing sets 1-4; run_cpu040 smoke, lc040, machine,
+  mmu, profile; memsweep seeds 1-180 (1,080 runs) pass. A planted fault
+  (the answer without the arriving beat) fails 48 of 48 runs. Not yet on
+  the board.

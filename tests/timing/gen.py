@@ -311,6 +311,18 @@ def build(mode):
         test("miss, %s victim: MOVE.L (A1),D0 / LEA 16(A1),A1 / DBRA" % nm, 256, 6, fillc(f), walk(0x2011), suite=4)
         test("miss, %s victim: MOVE.L D0,(A1) / LEA / DBRA" % nm, 256, 6, fillc(f), walk(0x2280), suite=4)
         test("miss, %s victim: ADDQ.L #1,(A1) / LEA / DBRA" % nm, 256, 6, fillc(f), walk(0x5291), suite=4)
+    # a miss with work behind it (the early answer, MC68040UM 4.6.1: the
+    # requested long word is available to the IU as it arrives): the load's
+    # value used at once, then work that touches no memory; and the next long
+    # word of the same line read right after the missed one
+    def walkw(*ws):
+        n = len(ws) + 3       # the words from the loop top to DBRA's extension
+        return lambda: emit(0x43F9, 0x0003, 0x0000, 0x323C, 0x00FF, *ws, 0x43E9, 0x0010,
+                            0x51C9, (-(2 * n)) & 0xFFFF)
+    test("miss, then use + 6 x ADDQ: MOVE.L (A1),D0 / ADD.L D0,D2 / ... / LEA / DBRA", 256, -1,
+         fillc(0x2010), walkw(0x2011, 0xD480, 0x5282, 0x5282, 0x5282, 0x5282, 0x5282, 0x5282), suite=4)
+    test("miss, then the next long word: MOVE.L (A1),D0 / MOVE.L 4(A1),D2 / LEA / DBRA", 256, -1,
+         fillc(0x2010), walkw(0x2011, 0x2429, 0x0004), suite=4)
     def t4(name, um, *ws, units=N, setup=nop): test(name, units, um, setup, rep(units, *ws), suite=4)
     t4("ADDQ.L #1,(A0) / MOVE.L 4(A0),D0 (same line, other bytes)", 2, 0x5290, 0x2028, 4, setup=lea_a0)
     t4("MOVE.L D1,(A0) / MOVE.L 4(A0),D0 (same line, other bytes)", 2, 0x2081, 0x2028, 4, setup=lea_a0)

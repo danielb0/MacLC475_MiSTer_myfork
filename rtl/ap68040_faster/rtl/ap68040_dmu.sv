@@ -97,7 +97,15 @@ module ap68040_dmu
 	// E_S_ACT with the victim's steps run during it (no E_FILL, E_FILLW,
 	// E_FILL_W, E_BUS), and with no dirty victim the fill's own result
 	// answers the lookup (no E_S_XL, E_S_XLW, E_S_XL2, E_S_ACT).  0: off.
-	parameter bit          FAST_STMISS = 1
+	parameter bit          FAST_STMISS = 1,
+	// A load's own line fill answers it at the beat that brings its bytes
+	// (critical long word first), not at the line's last beat: MC68040UM
+	// 4.6.1, the line read buffer makes the requested data "immediately
+	// available to the IU".  The engine stays on the bus, installs the line
+	// at the last beat and goes idle; while it waits, other accesses that
+	// hit in the cache go on ("other IU accesses that hit in the cache are
+	// supplied data").  0: off (the answer at the last beat).
+	parameter bit          EARLY_LD = 1
 )
 (
 	input  logic        clk,
@@ -879,6 +887,13 @@ logic  [2:0] e_n;                 // bytes in the current part
 logic [31:0] e_acc;               // load: assembled operand; store: left aligned data
 logic        e_fromline;          // the operand comes from bo_line (inhibited fill)
 logic        e_fillhit;           // ... from the line a load's own fill just installed
+logic        e_early;             // EARLY_LD: the fill's load was answered at its beat
+logic  [1:0] e_ig;                // ... and the clocks after its install settle (below)
+// EARLY_LD: DC1 lookups go on while an answered load's fill finishes; one
+// that reads the fill's set -- its own, or the next for an operand that
+// crosses a line -- waits until the install's tag and data writes have
+// landed (the clock after it, e_ig), then hits on the fast path as before
+wire         e_fset = e_early || e_ig != 2'd0;
 logic        e_kill;              // the DC2 job's uop was discarded
 logic        sp_job;              // the DC2 job is a fast split read
 logic        sp_dw;               // a write to the next set while its
@@ -911,7 +926,10 @@ logic        e_exw;
 // straight to the bus, touches neither either: its data is in bo_line.)
 wire  e_busq  = (e_st == E_BUS || e_st == E_BUS_W) && !steal &&
                 ((!bo.line && (e_ret == E_S_BUSD || (e_ret == E_W_DONE && e_wq))) ||
-                 (bo.line && !bo.rd && e_ret == E_W_DONE && e_wq));
+                 (bo.line && !bo.rd && e_ret == E_W_DONE && e_wq) ||
+                 // (EARLY_LD: a load's fill after its answer, the victim's
+                 // steps done: the line is installed only after E_BUS_W)
+                 (e_st == E_BUS_W && bo.line && bo.rd && e_ret == E_FILL_INS && e_early && fv == 2'd0));
 // An early MOVE16 store (m16_pre): the engine runs its line write from
 // DC2 and keeps the outcome for WB
 logic        e_pre;               // the engine's job is that write
@@ -1268,6 +1286,7 @@ always_ff @(posedge clk) begin
 		e_dc2_done <= 1'b0; e_wst_done <= 1'b0; e_wq <= 1'b0; e_exw <= 1'b0;
 		e_ldata <= '0; e_flt <= 1'b0; e_faddr <= '0; e_fssw <= '0;
 		e_part <= 1'b0; e_x <= '0; e_va <= '0; e_n <= '0; e_acc <= '0; e_fromline <= 1'b0; e_fillhit <= 1'b0;
+		e_early <= 1'b0; e_ig <= 2'd0;
 		e_breq <= 1'b0;
 		bo <= '0; bo_wd <= '0; bo_line <= '0; bo_err <= 1'b0; bo_rd <= '0;
 		bo_avec <= 1'b0; bo_tci <= 1'b0; bo_left <= '0; bo_pn <= '0; bo_pa <= '0;
@@ -1333,13 +1352,19 @@ always_ff @(posedge clk) begin
 			m1.ack     <= dm_ack;
 			m1_tp      <= transp_of(dm_va, dm_super, dm_fc, dm_ack);
 			m1_aset    <= tc_p ? dm_va[16:13] : dm_va[15:12];
-			m1_stale   <= (dw && dw_src != 2'd0 && dw_set == dm_va[CSH:4]) || !e_quiet;
+			m1_stale   <= (dw && dw_src != 2'd0 && dw_set == dm_va[CSH:4]) || !e_quiet ||
+			              (e_fset && (dm_va[CSH:4] == f_set || CSB'(dm_va[CSH:4] + 1'd1) == f_set));
 		end
 		else begin
 			if (adv_dc1) m1.v <= 1'b0;
 			m1_tp <= transp_of(m1.a, m1.smode, m1.fc, m1.ack);
 			m1_aset <= tc_p ? m1.a[16:13] : m1.a[15:12];
-			if ((dw && dw_src != 2'd0 && dw_set == m1_se) || !e_quiet) m1_stale <= 1'b1;
+			// (EARLY_LD: a lookup of the set a fill is about to install in
+			// waits for the install, then hits on the fast path, as before;
+			// lookups of other sets go on during the fill)
+			if ((dw && dw_src != 2'd0 && dw_set == m1_se) || !e_quiet ||
+			    (e_fset && (m1.a[CSH:4] == f_set || m1_set1 == f_set)))
+				m1_stale <= 1'b1;
 			// held, the RAMs and the ATC read DC1's own set again every
 			// clock (la_alt): a clock with the engine quiet and no write to
 			// that set makes the lookup good again from the next one
@@ -1415,6 +1440,13 @@ always_ff @(posedge clk) begin
 		else begin
 			if (adv_dc2) m2.r.v <= 1'b0;
 			if ((dw && dw_src != 2'd0 && dw_set == m2.r.a[CSH:4]) || !e_idleq) m2.fast <= 1'b0;
+			// a line installed in DC2's set (a fill's, or a restored victim)
+			// after its lookup: the lookup is spent, and the engine's job
+			// makes its own (E_S_XL), not a second fill of a line now there
+			// (EARLY_LD lets lookups run while a fill finishes).  Not an
+			// access whose own job runs or ran: the job keeps its result.
+			if (dw && dw_src != 2'd0 && dw_set == m2.r.a[CSH:4] && !adv_dc2 && !e_job && !e_dc2_done)
+				m2.x.ok <= 1'b0;
 			// (a second-lookup load's copy takes no merges for its second
 			// line, and one for its first would spoil that half)
 			if (m2_ph2 && ((dw && (dw_set == m2.r.a[CSH:4] || dw_set == m2_set1)) ||
@@ -1524,6 +1556,8 @@ always_ff @(posedge clk) begin
 		tw_hwq <= tw_hw_w;
 		tw_hvq <= tw_busy && !sn_frz && (f_set == tw_da[CSH:4]);
 		if (tw_busy) f_set <= tw_da[CSH:4];   // (lv_ra: the walk's set)
+
+		if (e_ig != 2'd0) e_ig <= e_ig - 2'd1;   // (EARLY_LD: set below at an install)
 
 		//--------------------------------------------------------------
 		// engine (frozen while the snooper has the cache)
@@ -2454,7 +2488,14 @@ always_ff @(posedge clk) begin
 				vp_lwe = 1'b1; vp_lv = 1'b1; vp_dwe = 1'b1; vp_dv = pv_dirty;
 				pv_v <= 1'b0;
 			end
-			if (bo_err && fill_late_ok) begin
+			if (e_early) begin
+				// EARLY_LD: the load was answered at its beat; a later beat's
+				// bus error (no exception: what it needed arrived, MC68040UM
+				// 7.6.1) or TCI leaves the line unallocated, as above
+				e_early <= 1'b0; e_ig <= 2'd1;
+				e_st    <= E_IDLE;
+			end
+			else if (bo_err && fill_late_ok) begin
 				// a later beat of the line failed, but what the access needs
 				// arrived (MC68040UM 7.6.1, 4.6.1): no exception, the line not
 				// allocated; a load takes its operand from what was read, a
@@ -2601,6 +2642,34 @@ always_ff @(posedge clk) begin
 					bo_got[b_rbeat] <= 1'b1;
 					if (b_rbeat == bo_pa[3:2]) bo_tci <= b_rtci;
 				end
+				// EARLY_LD: the beat that completes a load's bytes answers it
+				// (its own fill, not split, cachable so far, the victim's steps
+				// done); the line itself is installed at the last beat
+				if (EARLY_LD && bo.line && bo.rd && e_ret == E_FILL_INS && !e_early && !e_kill &&
+				    m2.r.v && m2.r.mem == M_LD && m2.r.msz != SZ_Q && e_sret == E_S_XL && !m2.split &&
+				    fv == 2'd0 && !bo_err && !bo_tci && !b_rtci && !(pbe_r && pv_for == 2'd0) &&
+				    ((fill_need & ~(bo_got | (4'b0001 << b_rbeat))) == 4'd0)) begin
+					logic [127:0] ln;
+					logic  [31:0] op;
+					xres_t        xf;
+					ln = bo_line;
+					ln[127 - 32*b_rbeat -: 32] = b_rdata;
+					op = (e_acc << (8 * e_n)) | take(ln, e_va[3:0], e_n);
+					xf = e_x;
+					xf.hit = 1'b1;
+					xf.way = f_way;
+					e_acc      <= op;
+					e_ldata    <= op;
+					e_x        <= xf;
+					m2.x       <= xf;
+					e_job      <= 1'b0;
+					e_dc2_done <= 1'b1;
+					e_early    <= 1'b1;
+					// the victim has been read (fv done, or before the bus on
+					// E_FILL's path): the engine gives the cache's read ports
+					// back, so DC1 is not held for the rest of the line
+					steal      <= 1'b0;
+				end
 				else begin
 					bo_rd   <= (bo_rd << (8 * bo_pn)) | grab(b_rdata, bo_pn, bo_pa[1:0]);
 					bo_avec <= b_ravec;
@@ -2635,7 +2704,28 @@ always_ff @(posedge clk) begin
 					steal      <= 1'b0;
 					e_st       <= E_IDLE;
 				end
-				else if (bo.line && bo.rd && e_ret == E_FILL_INS && !e_kill &&
+				else if (e_early && fv == 2'd0 && !bo_err && !bo_tci &&
+				         !(b_rvalid && b_rbeat == bo_pa[3:2] && b_rtci)) begin
+					// EARLY_LD: the line of a load answered at its beat is
+					// installed at the last beat's TA, as below (no answer:
+					// DC2 holds another access by now), and the engine is idle
+					dw      <= 1'b1;
+					dw_set  <= f_set;
+					dw_way  <= f_way;
+					dw_be   <= 16'hFFFF;
+					dw_src  <= 2'd1;
+					tw_b    <= 1'b1;
+					tset_b  <= f_set;
+					tway_b  <= f_way;
+					twd_b   <= f_tag;
+					vp_set = f_set; vp_wm[f_way] = 1'b1;
+					vp_lwe = 1'b1; vp_lv = 1'b1; vp_dwe = 1'b1; vp_dv = 1'b0;
+					rrc     <= rrc + 2'd1;
+					e_early <= 1'b0; e_ig <= 2'd1;
+					steal   <= 1'b0;
+					e_st    <= E_IDLE;
+				end
+				else if (bo.line && bo.rd && e_ret == E_FILL_INS && !e_kill && !e_early &&
 				         m2.r.mem == M_LD && e_sret == E_S_XL && !m2.split &&
 				         fv == 2'd0 && !bo_err && !bo_tci &&
 				         !(b_rvalid && b_rbeat == bo_pa[3:2] && b_rtci) &&
