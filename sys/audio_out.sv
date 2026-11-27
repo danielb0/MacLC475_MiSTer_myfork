@@ -198,6 +198,13 @@ always @(posedge clk, posedge reset) begin
 end
 
 wire [15:0] acl, acr;
+`ifdef MISTER_BYPASS_AUDIO_FILTER
+// (MacLC475: the project sets this switch, which this framework version did
+// not read; the core's samples go to the DC blocker unfiltered, and the
+// ini-selectable filters do not apply -- about 420 ALMs)
+assign acl = {~is_signed ^ cl[15], cl[14:0]};
+assign acr = {~is_signed ^ cr[15], cr[14:0]};
+`else
 IIR_filter #(.use_params(0)) IIR_filter
 (
 	.clk(clk),
@@ -219,6 +226,7 @@ IIR_filter #(.use_params(0)) IIR_filter
 	.output_l(acl),
 	.output_r(acr)
 );
+`endif
 
 wire [15:0] adl;
 DC_blocker dcb_l

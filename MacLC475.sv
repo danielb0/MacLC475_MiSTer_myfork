@@ -116,10 +116,12 @@ localparam CONF_STR = {
 	"D0P5T[16],Retry floppy I/O;",
 `endif
 `ifdef MACLC475_DEBUG
+`ifdef MACLC475_OVERLAY
 	"P9O[14],Video diagnostics,Off,On;",
 	"P9O[15],ADB diagnostics,Off,On;",
 	"P9-;",
 	"P9O[46:44],Perf counters,Off,Page 0,Page 1,Page 2,Page 3,Page 4,Page 5,Page 6;",
+`endif
 	"P9O[47],Perf counting,Run,Freeze;",
 	"P9T[48],Clear perf counters;",
 `endif
@@ -161,21 +163,30 @@ localparam CONF_STR = {
 wire  [1:0] buttons;
 wire [127:0] status;
 wire settings_pending;
+// MACLC475_DEBUG: the perf counters and their DDR3 snapshot (perflog).
+// MACLC475_OVERLAY (with DEBUG): the DAFB hex overlay's video and ADB
+// diagnostics and the counters' overlay pages.  The counters are read
+// through the snapshot; the overlay and the captures behind it (the
+// pages' multiplexer, last_io_read/write, the overlay's text) are left
+// out of the working build for room.
 `ifdef MACLC475_DEBUG
+wire perf_freeze = status[47];
+wire perf_clear = status[48];
+`else
+wire perf_freeze = 1'b1;
+wire perf_clear = 1'b0;
+`endif
+`ifdef MACLC475_OVERLAY
 wire video_diagnostic = status[14] | status[15];
 wire adb_diagnostic = status[15];
 // Perf counters (rtl/perf_counters.sv): a page replaces the overlay rows.
 wire perf_show = status[46:44] != 3'd0;
 wire [2:0] perf_page = status[46:44] - 3'd1;
-wire perf_freeze = status[47];
-wire perf_clear = status[48];
 `else
 wire video_diagnostic = 1'b0;
 wire adb_diagnostic = 1'b0;
 wire perf_show = 1'b0;
 wire [2:0] perf_page = 3'd0;
-wire perf_freeze = 1'b1;
-wire perf_clear = 1'b0;
 `endif
 wire video_diagnostic_v;
 wire [1:0] scale_v, mt32_info_v;
