@@ -787,12 +787,15 @@ wire        m1_fast  = (m1.mem == M_LD || m1.mem == M_RMW) && !m1.lock && !m1.pa
 //--------------------------------------------------------------------------
 // a store older than the DC2 load and not yet in the data RAM (EX, WB)
 wire  [27:0] m2_line = m2.x.pa[31:4];
-// (by the line within the page only, PA11-4: a store to the same offset of
-// another page is taken for the line too -- the load waits for it, or takes
-// the slow path; a smaller, shorter compare on DC2's hold)
+// (by PA19-4: a store to the same offset 1 Mbyte away is taken for the line
+// too -- the load waits for it, or takes the slow path; a shorter compare on
+// DC2's hold than the whole address.  It was PA11-4, the offset in the page:
+// a copy whose source and destination lie a multiple of 4 Kbytes apart then
+// had every load wait for the store before it, MOVE.L (A0),(A1) 4 clocks
+// for the manual's 1.)
 function automatic logic st_line(input mrec_t m, input logic [27:0] l);
 	st_line = m.r.v && (m.r.mem == M_ST || m.r.mem == M_RMW) &&
-	          (m.x.pa[11:4] == l[7:0] || (m.split && m.x1.pa[11:4] == l[7:0]));
+	          (m.x.pa[19:4] == l[15:0] || (m.split && m.x1.pa[19:4] == l[15:0]));
 endfunction
 wire hz = st_line(m3, m2_line) || st_line(m4, m2_line);
 // DC2's load is a plain read of the no-side-effect window (PA_NS_*), or a

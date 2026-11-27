@@ -499,3 +499,18 @@ LC 475's RAM timing; the estimate noted above is 10 (4-2-2-2).
   final memory image compared), linetrace with the real SDRAM path (a
   line read 0.3-0.5 clock slower on average, some now behind the push).
   Not yet on the board.
+
+## 20. A load waits for a store by PA19-4, not the offset in the page
+
+- **Before:** `st_line` matched a load in DC2 against the stores in EX and
+  WB by PA11-4 only. A copy whose source and destination lie a multiple of
+  4 Kbytes apart had every load wait for the store before it: `MOVE.L
+  (A0),(A1)` 4 clocks.
+- **Change** (`ap68040_dmu.sv`): the compare takes PA19-4.
+- **After:** 2 clocks, as with any other destination. (The manual's 1
+  needs both of the move's uops in one clock: DUAL, off in this build.)
+- **What the tables do not give** (MC68040UM 10.1): write-back times
+  ("system dependent"), so a store followed by a load of the same place,
+  and unaligned operands (supposition 3). The bench's figures for those
+  cases are sums or estimates of mine, not the manual's.
+- **Verified:** tests/timing sets 1 and 2, memsweep 360 of 360.
