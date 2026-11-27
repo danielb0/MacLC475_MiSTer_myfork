@@ -12,7 +12,7 @@ reg ack = 0;
 reg [31:0] rdata = 0;
 reg [31:0] mem [0:(1<<17)-1];
 integer WAITS = 0, BWAITS = 0, SB = 0, TRACE = -1, TPASS = 2, TMAX = 400, DM = 0;
-reg tracing = 0;
+reg tracing = 0, trun = 0;
 integer tlines = 0;
 integer cyc = 0, cnt = 0;
 integer t_mark [0:127];
@@ -63,7 +63,8 @@ always @(posedge clk) begin
                     end
                     else begin
                         t_mark[wdata[6:0]] <= cyc;
-                        if (pass == TPASS && wdata[6:0] == 2*TRACE) tracing <= 1;
+                        // (a test runs twice in a row: the second, timed run is traced)
+                        if (pass == TPASS && wdata[6:0] == 2*TRACE) begin tracing <= trun; trun <= 1; end
                         if (wdata[6:0] == 2*TRACE + 1) tracing <= 0;
                         if (pass == 0 && !seen[wdata[6:0]]) begin t_first[wdata[6:0]] <= cyc; seen[wdata[6:0]] <= 1'b1; end
                     end

@@ -42,6 +42,7 @@ def build(mode):
     put16(0x300, 0x54AF); put16(0x302, 0x0002); put16(0x304, 0x4E73)   # ADDQ.L #2,2(A7); RTE
     put16(0x310, 0x4E73)                                               # RTE
     put16(0x380, 0x4E75)                                               # RTS
+    put16(0x390, 0x61EE); put16(0x392, 0x4E75)                         # BSR.S $380; RTS
 
     if mode == "cb":
         emit(0x203C, 0x0000, 0xC020, 0x4E7B, 0x0006)    # DTT0: $00xxxxxx, copyback
@@ -197,6 +198,77 @@ def build(mode):
     t2("MOVE.L D0,4(A0) / MOVE.L 4(A0),D1 (the same bytes)", 2, 0x2140, 4, 0x2228, 4, setup=lea_a0)
     t2("MOVE.L D0,4(A0) / ADDQ.L #1,D2 / MOVE.L 4(A0),D1", 3, 0x2140, 4, 0x5282, 0x2228, 4, setup=lea_a0)
     t2("MOVE.L D0,4(A0) / ADDQ / ADDQ / MOVE.L 4(A0),D1", 4, 0x2140, 4, 0x5282, 0x5283, 0x2228, 4, setup=lea_a0)
+    # The third set: the instruction supply.  Instructions of one to five
+    # words with register, immediate and absolute operands (no clock is the
+    # data cache's), at both word alignments; and changes of flow of every
+    # kind the tables list, with outcomes that repeat, alternate and cycle.
+    # MC68040UM 10.4 - 10.6: the figures do not depend on the instruction's
+    # length, and a branch costs the same whatever it did the time before.
+    def t3(name, um, *ws, units=N, setup=nop): test(name, units, um, setup, rep(units, *ws), suite=3)
+    def al(off):                                        # the timed code starts at off (0, 2) in a long word
+        def f():
+            while st["pc"] % 4 != off: emit(0x7800)             # (the marker after it is two long words)
+        return f
+    test("(empty: marker overhead)", 1, 0, nop, nop, suite=3)
+    t3("1 word:  MOVE.L D0,D1", 1, 0x2200)
+    t3("2 words: ADDI.W #1,D0, long-aligned", 1, 0x0640, 1, setup=al(0))
+    t3("2 words: ADDI.W #1,D0, word-aligned", 1, 0x0640, 1, setup=al(2))
+    t3("2 words: MOVE.W #1,D0", 1, 0x303C, 1)
+    t3("2 words: LEA 4(A0),A1 (UM 2)", 2, 0x43E8, 4)
+    t3("3 words: MOVE.L #imm,D0", 1, 0x203C, 0x1234, 0x5678)
+    t3("3 words: ADDI.L #imm,D0", 1, 0x0680, 0, 1)
+    t3("3 words: LEA (xxx).L,A1", 1, 0x43F9, 0x0002, 0x0000)
+    t3("3 words: MOVE.L (xxx).L,D0", 1, 0x2039, 0x0002, 0x0000)
+    t3("3 words: MOVE.L D0,(xxx).L", 1, 0x23C0, 0x0002, 0x0000)
+    t3("3 words: MOVE.L #imm,(A0)", 1, 0x20BC, 0x1234, 0x5678, setup=lea_a0)
+    t3("4 words: MOVE.L #imm,4(A0) (UM 2)", 2, 0x217C, 0x1234, 0x5678, 4, setup=lea_a0)
+    t3("5 words: MOVE.L #imm,(xxx).L (UM 2)", 2, 0x23FC, 0x1234, 0x5678, 0x0002, 0x0000)
+    t3("5 words: MOVE.L (xxx).L,(xxx).L (UM 2)", 2, 0x23F9, 0x0002, 0x0000, 0x0002, 0x1040)
+    t3("5 words: CMPI.L #imm,(xxx).L (UM 2)", 2, 0x0CB9, 0x1234, 0x5678, 0x0002, 0x0000)
+    t3("1 + 3 words: MOVE.L D0,D1 / MOVE.L #imm,D0", 2, 0x2200, 0x203C, 0x1234, 0x5678)
+    t3("1 + 2 words: MOVE.L D0,D1 / ADDI.W #1,D0", 2, 0x2200, 0x0640, 1)
+    # unconditional changes of flow, each over one skipped word
+    t3("BRA.S", 2, 0x6002, 0x7200)
+    t3("BRA.L", 2, 0x60FF, 0x0000, 0x0006, 0x7200)
+    def jmp_abs():
+        for _ in range(N):
+            t = st["pc"] + 8; emit(0x4EF9, t >> 16, t & 0xFFFF, 0x7200)
+    test("JMP (xxx).L", N, 3, nop, jmp_abs, suite=3)
+    t3("JMP (d16,PC)", 6, 0x4EFA, 0x0004, 0x7200)
+    t3("BRA.S to a 3-word instruction (MOVE.L #imm,D0)", 3, 0x6002, 0x7200, 0x203C, 0x1234, 0x5678)
+    # conditional, the outcome always the same
+    test("BNE.S taken", N, 2, nop, lambda: (emit(0x7001), rep(N, 0x6602, 0x7400)()), suite=3)
+    test("BNE.S not taken (in a row)", N, 3, nop, lambda: (emit(0x7000), rep(N, 0x6602)()), suite=3)
+    test("BNE.W not taken (in a row)", N, 3, nop, lambda: (emit(0x7000), rep(N, 0x6600, 0x0002)()), suite=3)
+    # ... the outcome a pattern: ROL.L #1,D1 (3) / BCC.S +2 (2 taken, 3 not) / [MOVEQ] (1) / DBRA (3)
+    def pat(name, bits, um):
+        test("loop: ROL/BCC/[MOVEQ]/DBRA x100, carry " + name, 100, um,
+             lambda: emit(0x223C, bits >> 16, bits & 0xFFFF, 0x7063),
+             lambda: emit(0xE399, 0x6402, 0x7400, 0x51C8, 0xFFF8), suite=3)
+    pat("never (UM 8)", 0x00000000, 8)
+    pat("always (UM 10)", 0xFFFFFFFF, 10)
+    pat("every other time (UM 9)", 0x55555555, 9)
+    pat("2 of 3 (UM 9.33)", 0xDB6DB6DB, 9)
+    pat("3 of 4 (UM 9.5)", 0x77777777, 9)
+    pat("1 of 4 (UM 8.5)", 0x11111111, 8)
+    # loops that end: MOVEQ #k,D0 / DBRA D0,itself -- k turns of 3 clocks and the last of 4
+    for k in (0, 1, 2, 3, 7):
+        t3("MOVEQ #%d,D0 / DBRA D0,itself (loops %d times, then falls out)" % (k, k), 5 + 3 * k,
+           0x7000 | k, 0x51C8, 0xFFFE)
+    t3("loop of 2: MOVEQ #1,D0 / SUBQ.L #1,D0 + BGE.S (2 turns)", 1 + 1 + 2 + 1 + 3, 0x7001, 0x5380, 0x6CFC)
+    # calls and returns
+    def bsr3(tgt, n):
+        def f():
+            for _ in range(n): emit(0x6100, (tgt - (st["pc"] + 2)) & 0xFFFF)
+        return f
+    test("BSR.W / RTS", 32, 7, nop, bsr3(0x380, 32), suite=3)
+    t3("JSR (xxx).L / RTS", 8, 0x4EB9, 0x0000, 0x0380, units=32)
+    t3("JSR 0(A2) / RTS", 9, 0x4EAA, 0x0000, units=32)
+    test("BSR.W / BSR.S / RTS / RTS (two deep)", 32, 14, nop, bsr3(0x390, 32), suite=3)
+    t3("PEA 4(PC) / RTS (a return no call made)", 9, 0x487A, 0x0004, 0x4E75, units=32)
+    t3("LEA 4(PC),A0 / JMP (A0)", 5, 0x41FA, 0x0004, 0x4ED0, units=32)
+    test("loop: MOVE.L #imm,D1 / DBRA (x100)", 100, 4, lambda: emit(0x7063),
+        lambda: emit(0x223C, 0x1234, 0x5678, 0x51C8, 0xFFF8), suite=3)
     emit(0x7E7F, 0x23C7, MARK >> 16, MARK & 0xFFFF)     # marker $7F: end of pass
     emit(0x5386)                                        # SUBQ.L #1,D6
     emit(0x6600, (top - (st["pc"] + 2)) & 0xFFFF)       # BNE.W top
