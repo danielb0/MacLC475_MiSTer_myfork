@@ -610,3 +610,25 @@ LC 475's RAM timing; the estimate noted above is 10 (4-2-2-2).
 - **Verified:** tests/timing sets 1-4; run_cpu040 smoke, lc040, machine,
   mmu, profile; memsweep 360 of 360. A planted fault (a shadow's words
   loaded one place out) fails 48 of 48 memsweep runs. Not yet on the board.
+
+## 24. The shadow fetches only in slots the stream does not need
+
+- **Found by** the board (build 15): Norton's Branches 0.893 -> 0.884, its
+  refill share down 5 points of the clocks but nothing else up. The bench's
+  64 taken `BNE.W` in a row (2.14 -> 2.42, no refill, no wrong guess) is
+  the same: every other branch straddles a half-line, its target fetch
+  brings the operation word alone, and the shadow took the next clock,
+  which the stream needed for the extension word.
+- **Change** (`ap68040_fetch.sv` `alt_go`): a request takes F0 only when F1
+  holds a stream chunk with a BTB hit (F0's sequential fetch is dropped
+  that clock either way: F1 follows the branch, or rolls back on a miss),
+  when the stream would not fetch, or when the queue holds four words.
+  (From the BTB hit, not the cache's tag compare, which would sit in front
+  of F0's address.)
+- **After:** the two straight runs back on their figures before entry 23
+  (2.14, 4.39); excess over the manual on the 168 cases 277.0 -> 275.6,
+  none under. Expected on the board: Branches back to about 0.893, Sort,
+  Tree, Search as build 15.
+- **Verified:** tests/timing sets 1-4; run_cpu040 smoke, lc040, machine,
+  mmu, profile; memsweep 360 of 360. Not compiled yet (to go with the next
+  change).

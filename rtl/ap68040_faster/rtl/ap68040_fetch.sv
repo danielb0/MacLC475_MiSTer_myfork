@@ -343,7 +343,6 @@ logic  [1:0]   sh_blk;         // clocks a capture is refused after an invalidat
 logic  [1:0]   ap_v;           // requests (a FIFO of two)
 logic [30:0]   ap_pc [2];
 logic          f1_alt, f2_alt, f3_alt;
-logic          btk_r;          // F1 sent F0 to a BTB target last clock
 logic  [1:0]   f1_ai, f2_ai, f3_ai;
 genvar gp;
 generate
@@ -736,6 +735,12 @@ wire     [2:0] f1_nsq = 3'(FW) - 3'(f1_o);
 wire     [2:0] f1_ntk = 3'(f1_bslot) - 3'(f1_o) + 3'd1;
 wire f1_go      = f1_v && !redir_any;
 wire f1_deliver = f1_go && x_hit && !f1_alt;
+// F1 holds a stream chunk with a BTB hit: F0's sequential fetch of this
+// clock is dropped -- F1 sends F0 to the target (a hit) or rolls it back (a
+// miss) -- so a shadow fetch there costs the stream nothing.  (Not from the
+// cache's tag compare: that would sit in front of F0's address.  A return
+// with the fetch's stack empty is the one case the stream goes on.)
+wire f1_btk     = f1_go && !f1_alt && f1_bt;
 // a shadow chunk that hits goes on to F2; anything else drops it
 wire f1_adlv    = f1_go && x_hit && f1_alt;
 // the hit entry has words, for this mode
@@ -774,15 +779,16 @@ wire       tj_go    = tj_v && f3_go && ({1'b0, cnt} + inflight0 <= 6'(QN - 2));
 // meet that every fourth turn in the queue)
 wire       f0_go_s  = (st == S_RUN) && !odd && !stop && !redir_any &&
                       !iatc_flush_page && !inv_busy && !sn_inv && room && (bt_room || !HL);
-// SHADOW: a request takes F0 before the stream (both paths are fetched;
-// a fetch brings four words, D1 takes one instruction a clock) -- except in
-// the clock after F1 sent F0 to a BTB target, whose fetch then goes first
-// (the clock F1 does so, F0's sequential fetch is dropped anyway: a shadow
-// fetch there costs the stream nothing).  It needs the same room, as its
-// chunk passes F2 and F3 (it does not join the queue).
+// SHADOW: a request takes F0 in a slot the stream does not need: F1 drops
+// F0's fetch this clock (f1_btk), the stream would not fetch, or the queue
+// holds four words already.  Taking the stream's slot otherwise costs it a
+// clock every time an instruction straddles a half-line after a branch
+// target (64 taken BNE.W in a row: 2.14 -> 2.42 clocks; Norton's Branches
+// -1%).  It needs the same room, as its chunk passes F2 and F3 (it does not
+// join the queue).
 assign     alt_go   = SHADOW && HL && ap_v[0] && (st == S_RUN) && !stop && !redir_any &&
                       !iatc_flush_page && !inv_busy && !sn_inv && room &&
-                      !(btk_r && f0_go_s);
+                      (f1_btk || !f0_go_s || cnt >= 5'd4);
 wire       f0_go    = f0_go_s && !alt_go;
 // the redirect's clock as its target's F0 (the queue and the target list
 // are emptied by the redirect itself: there is room)
@@ -873,7 +879,7 @@ always_ff @(posedge clk) begin
 		qh  <= '0;
 		qp0 <= '0;
 		sh_v <= '0; sh_rr <= '0; sh_blk <= '0; ap_v <= '0;
-		f1_alt <= 1'b0; f2_alt <= 1'b0; f3_alt <= 1'b0; btk_r <= 1'b0;
+		f1_alt <= 1'b0; f2_alt <= 1'b0; f3_alt <= 1'b0;
 		f1_ai <= '0; f2_ai <= '0; f3_ai <= '0;
 		for (int i = 0; i < 2; i++) ap_pc[i] <= '0;
 	end
@@ -995,7 +1001,6 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 		f1_v  <= 1'b0;
 		f1_btok <= 1'b0;
 		f1_alt <= 1'b0;
-		btk_r <= 1'b0;
 		if (f0_go) begin
 			f1_v   <= 1'b1;
 			f1_btok <= bt_room;
@@ -1093,7 +1098,6 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				f2_b <= FW'(1) << (f1_ntk - 3'd1);
 				if (one && tu) f2_w[1] <= t[0] ? tw_lw[15:0] : tw_lw[31:16];
 				f2_t <= t;
-				btk_r <= 1'b1;
 				// (F0's sequential chunk of this clock is dropped; a shadow
 				// chunk is not the stream's and goes on)
 				if (!alt_go) begin f1_v <= 1'b0; f1_btok <= 1'b0; end
