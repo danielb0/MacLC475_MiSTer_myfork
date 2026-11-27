@@ -805,7 +805,7 @@ assign scc_txd_a = scc_txd_int;
 `endif  // SCSI_TRACE
 
 //----------------------------------------------------------------------------
-// EASC — stereo FIFO (every Mac OS sound) plus the wavetable boot chime
+// EASC — stereo FIFOs with the CD-XA decoder the ROM's startup chime uses
 //----------------------------------------------------------------------------
 wire        asc_stb = ce && (astate == A_IDLE) && sel && !ack && sel_asc;
 wire [31:0] asc_rdata;
