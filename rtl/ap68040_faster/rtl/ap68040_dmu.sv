@@ -1538,6 +1538,12 @@ always_ff @(posedge clk) begin
 			end
 			if (wfs_p1)
 				;                       // a split WB store's second part next
+			else if (pv_v) begin
+				// the victim of the fill just used: pushed before any other
+				// job (a later access to its address must find it in memory)
+				e_sret <= E_IDLE;
+				e_st   <= E_PUSHV_B;
+			end
 			else if (mt_v && !mt_done)
 				e_st <= E_M_START;
 			else if (wb_slow) begin
@@ -2395,6 +2401,9 @@ always_ff @(posedge clk) begin
 		end
 		E_FILLW: e_st <= E_FILL_W;
 		E_FILL_W: begin
+			// synthesis translate_off
+			if (pv_v) begin $display("FAIL: dmu: a fill with the push buffer full"); $finish; end
+			// synthesis translate_on
 			if (lve_q[f_way] && ld_q[f_way]) begin     // (ld_ra, lv_ra: f_set)
 				pv_v     <= 1'b1;
 				pv_line  <= dq_w;
@@ -2464,13 +2473,29 @@ always_ff @(posedge clk) begin
 				e_x.cm     <= 2'b11;
 				e_st       <= (m2.r.mem != M_ST) ? E_S_ACT : E_S_NEXT;
 			end
-			else if (pv_v) e_st <= E_PUSHV_B;
-			else if (m2.r.mem == M_LD && e_sret == E_S_XL) begin
+			// (A dirty victim waits in the push buffer while the access the
+			// fill was for completes, and is pushed from E_IDLE before the
+			// engine takes anything else: MC68040UM 4.6.2 has the push after
+			// the line read, and the access does not wait for it.  Before,
+			// the push came first, took bo_line, and the access looked its
+			// own line up again: about 20 clocks after the fill with ideal
+			// memory.  Not for a split access, whose second part may fill
+			// and need the push buffer itself.)
+			else if ((m2.r.mem == M_LD || (m2.r.mem == M_RMW && !m2.r.lock && !m2.split)) &&
+			         e_sret == E_S_XL && !(pv_v && m2.split)) begin
 				// a load's own fill: its operand from the line just read
-				// (still in bo_line), not a second lookup of that line
+				// (still in bo_line), not a second lookup of that line.  An
+				// unlocked read-modify-write the same: its read is a load's,
+				// and its write in WB finds the way just installed.
 				e_fillhit <= 1'b1;
+				if (m2.r.mem == M_RMW) begin
+					e_x.hit <= 1'b1;
+					e_x.way <= f_way;
+				end
 				e_st      <= E_S_ACT;
 			end
+			else if (pv_v && !(FAST_STMISS && m2.r.mem == M_ST && e_sret == E_S_XL && !m2.split))
+				e_st <= E_PUSHV_B;
 			else if (FAST_STMISS && m2.r.mem == M_ST && e_sret == E_S_XL) begin
 				// a store's own fill: the part is a hit in the way just
 				// installed, which is all the second lookup would say
@@ -2608,7 +2633,7 @@ always_ff @(posedge clk) begin
 				end
 				else if (bo.line && bo.rd && e_ret == E_FILL_INS && !e_kill &&
 				         m2.r.mem == M_LD && e_sret == E_S_XL && !m2.split &&
-				         fv == 2'd0 && !pv_v && !bo_err && !bo_tci &&
+				         fv == 2'd0 && !bo_err && !bo_tci &&
 				         !(b_rvalid && b_rbeat == bo_pa[3:2] && b_rtci) &&
 				         !(pbe_r && pv_for == 2'd0)) begin
 					// a load's own fill with no dirty victim installs the

@@ -468,3 +468,34 @@ LC 475's RAM timing; the estimate noted above is 10 (4-2-2-2).
   clock); a read waits for the whole write FIFO, whose drain takes 7
   clk_ram a long word, and its read pointer crosses through an extra
   register (2-3 clocks behind writes).
+
+## 19. A data-cache miss is answered before its victim is pushed
+
+- **Board:** under Norton every RAM data read is a line fill; the engine's
+  lookup states took about 5 clocks a miss on top of the bus (Instruction:
+  11% of all clocks).
+- **Before:** with a dirty victim the fill's end went to the push first
+  (`E_PUSHV_B`), which takes `bo_line`, and the access then looked its own
+  line up again (`E_S_XL` ... `E_S_DONE`): answered about 20 clocks after
+  the line read with ideal memory, against at once for a clean victim. A
+  read-modify-write got no shortcut with either victim.
+- **Documentation:** MC68040UM 4.6.2: the dirty line goes to the push
+  buffer and is written after the line read; the access does not wait.
+- **Change** (`ap68040_dmu.sv`): the load's and the store's own-fill
+  shortcuts apply with a dirty victim as well (also the last-beat one);
+  the victim stays in the push buffer and is pushed from `E_IDLE` before
+  the engine takes any other job. An unlocked, unsplit read-modify-write
+  takes the load's shortcut, its write finding the way just installed. A
+  split access keeps the old order (its second part may need the push
+  buffer); a simulation check fails a fill that finds the buffer full.
+- **A push that ends in a bus error** is now reported with the next DC2
+  job, not the one whose fill evicted the line (no RAM here answers TEA).
+- **After** (clocks a turn of `op / LEA 16(A1),A1 / DBRA`, ideal memory,
+  every turn a miss): load 16.4 -> 12.5 dirty, 11.4 -> 11.1 mixed; store
+  16.4 -> 14.5; `ADDQ.L #1,(A1)` 17.8 -> 15.0 dirty, 14.6 -> 11.8.
+  `MOVE.L D0,(A4)` write misses 27.0 -> 23.0.
+- **Verified:** tests/timing sets 1-4, run_cpu040 smoke/lc040/machine/mmu/
+  profile, memsweep 360 of 360 (dirty evictions, split operands, the
+  final memory image compared), linetrace with the real SDRAM path (a
+  line read 0.3-0.5 clock slower on average, some now behind the push).
+  Not yet on the board.
