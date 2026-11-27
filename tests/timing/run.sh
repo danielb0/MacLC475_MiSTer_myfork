@@ -8,6 +8,7 @@
 #           +WAITS=n       extra clocks before the first acknowledge of a transfer
 #           +BWAITS=n      extra clocks before each later beat of a line
 #           +TRACE=n       per-clock pipeline trace of test n (0-based line of tests.txt)
+#           +STALLS=1      the CPU's stall counters (perf_counters 50-57) for each timed run
 #           +TPASS=p +TMAX=lines   (the trace follows the second, timed run of the test)
 # SUITE=n (environment): 1 the first set, 2 the rest of the tables, 3 the instruction supply, 4 the sweep
 #           (instruction length, branches, calls and returns)
@@ -29,4 +30,4 @@ fi
 cd "$out"
 python3 ../../../tests/timing/gen.py > gen.log
 ./obj/Vtb_timing "$@" > run.log 2>&1 || true
-grep -E "^(RESULT|T |TIMEOUT|HALTED)" run.log
+grep -E "^(RESULT|STALLS|T |TIMEOUT|HALTED)" run.log

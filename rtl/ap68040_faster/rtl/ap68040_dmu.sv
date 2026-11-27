@@ -221,8 +221,9 @@ module ap68040_dmu
 	// a read that is split, [8] store posted, [9] store through the general
 	// path, [10] such a store that is split; and for the MMU and caches:
 	// [11] a table walk started, [12] a PFLUSH (any scope), [13] a
-	// CINV/CPUSH reaching the instruction cache, [14] a line pushed by CPUSH
-	output logic [14:0] dbg_perf
+	// CINV/CPUSH reaching the instruction cache, [14] a line pushed by CPUSH;
+	// [15] a load in DC2 waits for an older store to its bytes (fast_wait)
+	output logic [15:0] dbg_perf
 );
 
 localparam logic [2:0] MT_CINV = 3'd1, MT_CPUSH = 3'd2, MT_PFLUSH = 3'd3, MT_PTEST = 3'd4;
@@ -3303,6 +3304,6 @@ always_comb begin
 	default:                                        dbg_ecls = 3'd7;
 	endcase
 end
-assign dbg_perf = {pe_mmu, pe_vram, m4.r.v && !adv_wb, m2.r.v && !adv_dc2, dbg_ecls};
+assign dbg_perf = {fast_wait, pe_mmu, pe_vram, m4.r.v && !adv_wb, m2.r.v && !adv_dc2, dbg_ecls};
 
 endmodule

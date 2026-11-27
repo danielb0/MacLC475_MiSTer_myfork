@@ -40,6 +40,9 @@ NAMES = [
     # page 6
     "walks", "ram_rd_linec", "vst_slow", "dc_flush_all",
     "ic_inv", "cpush_lines",
+    # c42-c49: the CPU's stalls (perf_counters 50-57); 0 in older captures
+    "br_cond", "br_cond_wrong", "br_other_wrong", "d_redir",
+    "refill_cyc", "pace_hold", "ag_dep", "st_ld_wait",
 ]
 IDX = {n: i for i, n in enumerate(NAMES)}
 
@@ -50,7 +53,7 @@ def load(path):
         for r in csv.DictReader(f):
             try:
                 rows.append((float(r["t"]), int(r["seq"]),
-                             [int(r["c%d" % i]) for i in range(len(NAMES))]))
+                             [int(r.get("c%d" % i) or 0) for i in range(len(NAMES))]))
             except (KeyError, ValueError):
                 pass              # a cut-off last line
     return rows
@@ -172,6 +175,21 @@ def report(ds, lo, hi):
           % (w, g("dc_flush_all"), g("ic_inv"), g("cpush_lines")))
     if w:
         print("  cycles / table walk      %.1f" % (g("eng_walk") / w))
+    bc = g("br_cond")
+    if bc or g("refill_cyc"):
+        rd = g("br_cond_wrong") + g("br_other_wrong") + g("d_redir")
+        print("  conditional branches %d, guessed wrong %d (%.1f%%); other wrong %d; "
+              "decoder redirects %d" % (bc, g("br_cond_wrong"),
+              100 * g("br_cond_wrong") / bc if bc else 0, g("br_other_wrong"), g("d_redir")))
+        print("  per 1000 instructions: conditional %.1f, wrong guesses %.1f, decoder redirects %.1f"
+              % tuple(1000 * x / max(g("retired"), 1) for x in
+                      (bc, g("br_cond_wrong") + g("br_other_wrong"), g("d_redir"))))
+        if rd:
+            print("  refill clocks / redirect (all kinds, incl. exceptions) %.1f"
+                  % (g("refill_cyc") / rd))
+        print("  share of clocks: refill %.1f%%, pacer hold %.1f%%, AG register wait %.1f%%, "
+              "load behind store %.1f%%" % tuple(100 * g(n) / cyc for n in
+              ("refill_cyc", "pace_hold", "ag_dep", "st_ld_wait")))
 
 
 def main():

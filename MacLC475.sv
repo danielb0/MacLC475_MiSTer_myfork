@@ -1365,6 +1365,8 @@ assign     eth_mem_rvalid = ddr_wait_eth && DDRAM_DOUT_READY;
 //   words 23-26  the CPU's last F-line / illegal trap (perf_counters reads
 //                42-49; layout in ap68040_backend dbg_trap), after the
 //                trailer so perflog.py's 23-word snapshot is unchanged
+//   words 27-30  counters 50-57, the CPU's own stalls (perf_counters.sv),
+//                after the trap capture, read by perflog.py as c42-c49
 // A reader that finds the two seq fields equal has a whole snapshot.  The
 // counters are read one per clock while the copy runs, so a snapshot spans a
 // few microseconds; nothing is cleared or frozen.  Writes go after every
@@ -1379,7 +1381,7 @@ localparam PERF_DDR = 0;
 reg [17:0] perf_ddr_tick = 18'd0;
 reg [31:0] perf_ddr_seq = 32'd0;
 reg        perf_ddr_busy = 1'b0;
-reg  [4:0] perf_ddr_word = 5'd0;           // 0-22
+reg  [4:0] perf_ddr_word = 5'd0;           // 0-30
 reg  [1:0] perf_ddr_phase = 2'd0;
 reg  [5:0] perf_ddr_idx = 6'd0;
 reg [31:0] perf_ddr_lo = 32'd0;
@@ -1392,7 +1394,7 @@ always @(posedge clk_sys) begin
 	perf_ddr_tick <= perf_ddr_tick + 1'b1;
 	if (perf_ddr_accept) begin
 		perf_ddr_req <= 1'b0;
-		if (perf_ddr_word == 5'd26) perf_ddr_busy <= 1'b0;
+		if (perf_ddr_word == 5'd30) perf_ddr_busy <= 1'b0;
 		else perf_ddr_word <= perf_ddr_word + 1'b1;
 	end
 	else if (!perf_ddr_busy) begin

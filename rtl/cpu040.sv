@@ -79,7 +79,7 @@ wire [31:0] dbg_pc;
 wire        dbg_halted;
 wire        dbg_retire;
 wire [63:0] dbg_pev;
-wire [15:0] dbg_perf;
+wire [23:0] dbg_perf;
 wire [255:0] dbg_trap;          // last F-line / illegal trap (perf words 23-26)
 wire [31:0] c_di;
 wire        c_ta_n, c_tea_n, c_tci_n, c_avec_n;

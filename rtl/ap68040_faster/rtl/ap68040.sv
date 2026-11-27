@@ -111,8 +111,13 @@ module ap68040
 	// state class, [3] DC2 held, [4] WB held (ap68040_dmu), [5] the
 	// decoder's queue is empty; [11:6] the DMU's frame buffer access
 	// strobes (its dbg_perf[10:5]); [15:12] its MMU and cache strobes
-	// (its dbg_perf[14:11])
-	output logic  [15:0] dbg_perf,
+	// (its dbg_perf[14:11]); [16] a conditional branch leaves EX, [17] the
+	// same guessed wrong, [18] another branch, jump or return guessed wrong,
+	// [19] a redirect from D1, [20] the front end refills: from a redirect
+	// until the back end takes a uop, [21] the pacer holds EX, [22] AG waits
+	// for a register, [23] a DC2 load waits for an older store (all clocks
+	// or one-clock strobes; ap68040_backend dbg_bp, ap68040_dmu dbg_perf[15])
+	output logic  [23:0] dbg_perf,
 	// observation only: the last F-line / illegal trap (ap68040_backend)
 	output logic [255:0] dbg_trap
 );
@@ -339,10 +344,11 @@ ap68040_backend #(.HAS_FPU(HAS_FPU), .FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_
 	.ipl(ipl_v), .dbcc_floor(dbcc_floor), .iack_lvl(iack_lvl), .rsto_req(rsto_req), .rsto_busy(rsto_busy),
 	.kill_now(kill_now), .lk_abandon(lk_abandon), .adv_ag(adv_ag),
 	.dtt0(dtt0), .dtt1(dtt1), .itt0(itt0), .itt1(itt1), .tc(tc),
-	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_retire2(dbg_retire2), .halted(dbg_halted), .dbg_trap(dbg_trap), .fetch_stop(be_fstop)
+	.dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_retire2(dbg_retire2), .halted(dbg_halted), .dbg_trap(dbg_trap), .dbg_bp(be_bp), .fetch_stop(be_fstop)
 );
 
-logic [14:0] dm_perf;
+logic [15:0] dm_perf;
+logic  [4:0] be_bp;
 ap68040_dmu #(.DC1_ATC(DC1_ATC), .FAST_BUS(DM_FAST_BUS), .PA_IO_SERIAL(PA_IO_SERIAL),
 	.PA_C0_MASK(PA_C0_MASK), .PA_C0_MATCH(PA_C0_MATCH),
 	.PA_C1_MASK(PA_C1_MASK), .PA_C1_MATCH(PA_C1_MATCH),
@@ -490,7 +496,15 @@ logic   [9:0] dbg_d;
 // retires an instruction, and a second-slot one
 assign dbg_pev = {6'd0, dbg_retire2, dbg_retire, dbg_pu[19:16], dbg_pd[35:32],
                   dbg_pu[15:0], dbg_pd[31:0]};
-assign dbg_perf = {dm_perf[14:5], qcnt == 4'd0, dm_perf[4:0]};
+// the refill after a redirect, for the counters: from the redirect's clock
+// until the back end takes a uop
+logic pf_refill;
+always_ff @(posedge clk)
+	if (!nreset) pf_refill <= 1'b0;
+	else if (redir_v || d_redir_v) pf_refill <= 1'b1;
+	else if (uo_v && uo_rdy) pf_refill <= 1'b0;
+assign dbg_perf = {dm_perf[15], be_bp[4:3], pf_refill || redir_v || d_redir_v, d_redir_v, be_bp[2:0],
+                   dm_perf[14:5], qcnt == 4'd0, dm_perf[4:0]};
 assign dbg_fe = {dbg_d, 10'd0, consume, qcnt, d_redir_v, redir_v, btb_we, btb_wkind, btb_wslot, btb_wtgt,
                  d_redir_pc, redir_pc, qpc, dbg_pc, dbg_f};
 

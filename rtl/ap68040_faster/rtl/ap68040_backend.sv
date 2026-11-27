@@ -156,6 +156,11 @@ module ap68040_backend
 	output logic        dbg_retire2,    // ... and a second instruction (the second slot)
 	output logic        halted,
 	output logic [255:0] dbg_trap,      // last F-line / illegal trap (diag)
+	// observation only, for perf counters: [0] a conditional branch (Bcc,
+	// DBcc) leaves EX, [1] the same guessed wrong, [2] any other branch,
+	// jump or return leaves EX guessed wrong, [3] the pacer holds EX this
+	// clock, [4] AG holds this clock for a register an older uop writes
+	output logic   [4:0] dbg_bp,
 	output logic        fetch_stop      // no new instruction fetches: stopped
                                         // (STOP) or halted
 );
@@ -1431,6 +1436,14 @@ wire        ex_early = ex_mispred && !ex_u.ser && !ex_sr_we &&
 // instruction) is not held: the refill behind it is longer than its figure,
 // and holding it first would add to that.
 logic [5:0] pace_cnt;
+// (perf strobes, dbg_bp: a true conditional is a Bcc whose figure is 3 or
+// a DBcc, as pace_br; BRA and BSR count with the other branches)
+wire        pf_cond  = (ex_u.br == BR_COND) && ((ex_u.op == OP_BCC && ex_u.tmin == 6'd3) || ex_u.op == OP_DBCC);
+assign dbg_bp = {ag_interlock && !stall_dc1,
+                 pace_hold && ex_v,
+                 adv_ex && ex_br && ex_mispred && !pf_cond,
+                 adv_ex && pf_cond && ex_mispred,
+                 adv_ex && pf_cond};
 // (BRA and BSR reach EX as a Bcc that is always taken: their figure, 2,
 // has no shorter case -- only a true Bcc's 3 and a DBcc's 4 do)
 wire        pace_br   = (ex_u.br == BR_COND) && ((ex_u.op == OP_BCC && ex_u.tmin == 6'd3) || ex_u.op == OP_DBCC);

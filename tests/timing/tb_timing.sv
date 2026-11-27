@@ -11,7 +11,9 @@ wire [31:0] addr, wdata;
 reg ack = 0;
 reg [31:0] rdata = 0;
 reg [31:0] mem [0:(1<<17)-1];
-integer WAITS = 0, BWAITS = 0, SB = 0, TRACE = -1, TPASS = 2, TMAX = 400, DM = 0;
+integer WAITS = 0, BWAITS = 0, SB = 0, TRACE = -1, TPASS = 2, TMAX = 400, DM = 0, STALLS = 0;
+// +STALLS=1: the CPU's stall counters (perf_counters 50-57) over each timed run
+integer sx [0:127][0:7];
 reg tracing = 0, trun = 0;
 integer tlines = 0;
 integer cyc = 0, cnt = 0;
@@ -63,6 +65,7 @@ always @(posedge clk) begin
                     end
                     else begin
                         t_mark[wdata[6:0]] <= cyc;
+                        for (int j = 0; j < 8; j++) sx[wdata[6:0]][j] <= tb_timing.dut.perf.cx[j];
                         // (a test runs twice in a row: the second, timed run is traced)
                         if (pass == TPASS && wdata[6:0] == 2*TRACE) begin tracing <= trun; trun <= 1; end
                         if (wdata[6:0] == 2*TRACE + 1) tracing <= 0;
@@ -153,6 +156,11 @@ task report;
             if (k == 0) begin base = t_mark[1] - t_mark[0]; base1 = t_first[1] - t_first[0]; end
             $display("RESULT %0d|%0d|%0d|%0d|%0s", t_mark[2*k+1] - t_mark[2*k] - base, u, um,
                      t_first[2*k+1] - t_first[2*k] - base, name);
+            if (STALLS != 0)
+                $display("STALLS cond %0d wrong %0d other_wrong %0d dredir %0d refill %0d pace %0d agdep %0d stld %0d",
+                         sx[2*k+1][0] - sx[2*k][0], sx[2*k+1][1] - sx[2*k][1], sx[2*k+1][2] - sx[2*k][2],
+                         sx[2*k+1][3] - sx[2*k][3], sx[2*k+1][4] - sx[2*k][4], sx[2*k+1][5] - sx[2*k][5],
+                         sx[2*k+1][6] - sx[2*k][6], sx[2*k+1][7] - sx[2*k][7]);
             k = k + 1;
         end
         $display("RESULT bus beats: instr %0d data-read %0d write %0d, cycles %0d", nbus_i, nbus_d, nbus_w, cyc);
@@ -169,6 +177,7 @@ initial begin
     void'($value$plusargs("TRACE=%d", TRACE));
     void'($value$plusargs("TPASS=%d", TPASS));
     void'($value$plusargs("DM=%d", DM));
+    void'($value$plusargs("STALLS=%d", STALLS));
     void'($value$plusargs("TMAX=%d", TMAX));
     repeat (4) @(negedge clk);
     nreset = 1;

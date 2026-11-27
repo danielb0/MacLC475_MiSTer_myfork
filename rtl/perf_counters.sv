@@ -44,6 +44,14 @@
 // beats at all.)  Slot 39 (was PFLUSH, which the Mac OS never issues)
 // counts CINV/CPUSH of the whole data cache (CINVA/CPUSHA DC or BC).
 //
+// Counters 50-57 (DDR3 snapshot only, not on the overlay), the CPU's own
+// stalls (ap68040 dbg_perf[23:16]): 50 conditional branches (Bcc, DBcc)
+// completed, 51 of them guessed wrong, 52 other branches, jumps and
+// returns guessed wrong, 53 redirects from the decoder, 54 clocks the
+// front end refills after a redirect, 55 clocks the pacer holds EX,
+// 56 clocks AG waits for a register, 57 clocks a load waits in DC2 for
+// an older store.  (42-49 are the trap capture.)
+//
 // rd_idx/rd_data read any one counter by number (0-41, page * 6 + slot) for
 // the DDR3 snapshot (MacLC475.sv perf_ddr_*): no clear or freeze needed,
 // the reader differences successive snapshots.
@@ -59,7 +67,7 @@ module perf_counters (
 	input       [2:0] page,
 
 	input             retire, retire2,
-	input      [15:0] core,        // ap68040 dbg_perf
+	input      [23:0] core,        // ap68040 dbg_perf
 
 	input             c_req, c_ack, c_write, c_instr,
 	input             c_line,          // a line transfer (SIZ = 11)
@@ -132,6 +140,15 @@ generate for (g = 0; g < N; g = g + 1) begin : g_cnt
 	assign wrap[g] = !clear && !freeze && nxt[32];
 end endgenerate
 
+// counters 50-57: the CPU's stalls
+reg  [31:0] cx [0:7];
+generate for (g = 0; g < 8; g = g + 1) begin : g_cx
+	initial cx[g] = 32'd0;
+	always @(posedge clk)
+		if (clear) cx[g] <= 32'd0;
+		else if (!freeze && core[16 + g]) cx[g] <= cx[g] + 32'd1;
+end endgenerate
+
 always @(posedge clk)
 	if (clear) ovf <= 1'b0;
 	else if (|wrap) ovf <= 1'b1;
@@ -147,6 +164,7 @@ assign row4 = {cnt[base + 6'd4], cnt[base + 6'd5]};
 // 42-49 are not counters: the CPU's last F-line / illegal trap capture
 wire [5:0] trap_k = rd_idx - 6'd42;
 assign rd_data = (rd_idx < N)      ? cnt[rd_idx] :
-                 (rd_idx < 6'd50)  ? trap[trap_k[2:0] * 32 +: 32] : 32'd0;
+                 (rd_idx < 6'd50)  ? trap[trap_k[2:0] * 32 +: 32] :
+                 (rd_idx < 6'd58)  ? cx[rd_idx[2:0] - 3'd2] : 32'd0;
 
 endmodule

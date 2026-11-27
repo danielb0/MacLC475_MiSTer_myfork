@@ -33,6 +33,21 @@ Four rows of hex. Rows 1, 3 and 4 hold two counters each (left, right); row 2 is
 | 5 (VRAM controller, RAM) | read hits in the line cache, line fills issued | RAM data line (SIZ = 11) read beats (`ram_rd_line`), frame buffer reads through the general path (`vrd_gen`) | read-wait clocks behind a scanline DMA burst, split general-path reads (`vrd_gen_split`) |
 | 6 (MMU, caches, VRAM stores) | table walks started (`walks`), request cycles of RAM data line reads (`ram_rd_linec`) | stores through the general path (`vst_slow`), CINVA/CPUSHA that include the data cache (`dc_flush_all`; was PFLUSH, which the Mac OS never issues) | CINV/CPUSHes reaching the instruction cache (`ic_inv`), lines pushed by CPUSH (`cpush_lines`) |
 
+**The CPU's stalls** (2026-11-27; DDR3 snapshot only, not on the overlay; perf_counters 50-57, snapshot words 27-30 after the trap capture, columns `c42`-`c49` of a `perflog.py` capture; older captures read 0 there):
+
+| Column | Name | Counts |
+|---|---|---|
+| c42 | `br_cond` | conditional branches (Bcc, DBcc) leaving EX; BRA and BSR are not counted |
+| c43 | `br_cond_wrong` | of those, the ones the front end guessed wrong |
+| c44 | `br_other_wrong` | any other branch, jump or return leaving EX on a wrong guess (an indirect jump the front end did not follow counts here) |
+| c45 | `d_redir` | redirects from the decoder (a branch the BTB did not predict, or predicted to the wrong place) |
+| c46 | `refill_cyc` | clocks from any redirect (back end, decoder, exception) until the back end takes a uop |
+| c47 | `pace_hold` | clocks the pacer holds EX to the manual's figure |
+| c48 | `ag_dep` | clocks AG waits for a register an older uop writes |
+| c49 | `st_ld_wait` | clocks a load in DC2 waits for an older store to its bytes (or for the data RAM write ahead of it) |
+
+`tests/timing/run.sh +STALLS=1` prints the same eight for each timed bench run.
+
 - Pages 2-4 (except the machine-side pair) watch the CPU's own bus, before the store buffer: a request cycle there is a cycle the bus unit waits on that kind of access. A beat is one acked longword; a line fill is four beats, so ifetch beats / 4 = I-cache misses.
 - Engine idle cycles = cycles minus page 1 and page 0's last counter.
 - IPC = retired / cycles.

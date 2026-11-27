@@ -6,7 +6,8 @@
 #   t,seq,c0,...,c41
 #
 # t is the MiSTer's wall clock (seconds), seq the core's snapshot number
-# (one per 2^18 clocks), c0-c41 the raw 32-bit counters (they wrap; the
+# (one per 2^18 clocks), c0-c41 the raw 32-bit counters, c42-c49 the CPU's
+# stall counters (perf_counters 50-57, snapshot words 27-30; they wrap; the
 # report takes differences modulo 2^32).  Run it from the PC so the CSV lands
 # there and nothing has to be copied to the MiSTer:
 #
@@ -28,6 +29,9 @@ PHYS = 0x27F00000
 MAGIC = 0x50455246
 WORDS = 23                    # 64-bit words: header, 21 counter pairs, trailer
 N = 42
+# words 23-26 are the trap capture; 27-30 the CPU's stall counters (c42-c49),
+# read after the trailer (older cores leave them unwritten: whatever is there)
+XW, XN = 27, 8
 
 interval = float(sys.argv[1]) if len(sys.argv) > 1 else 1.0
 duration = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0
@@ -39,18 +43,18 @@ mem = mmap.mmap(fd, 4096, mmap.MAP_SHARED, mmap.PROT_READ, offset=PHYS)
 def snapshot():
     """One whole snapshot as (seq, counters), or None if none is valid."""
     for _ in range(50):
-        w = struct.unpack_from("<%dI" % (WORDS * 2), mem, 0)
+        w = struct.unpack_from("<%dI" % ((XW + XN // 2) * 2), mem, 0)
         magic, seq = w[0], w[1]
-        tmagic, tseq = w[-2], w[-1]
+        tmagic, tseq = w[WORDS * 2 - 2], w[WORDS * 2 - 1]
         if magic != MAGIC or tmagic != (~MAGIC & 0xFFFFFFFF):
             return None
         if seq == tseq:
-            return seq, w[2:2 + N]
+            return seq, w[2:2 + N] + w[XW * 2:XW * 2 + XN]
         time.sleep(0.0005)    # caught the core mid-copy: try again
     return None
 
 
-print("t,seq," + ",".join("c%d" % i for i in range(N)), flush=True)
+print("t,seq," + ",".join("c%d" % i for i in range(N + XN)), flush=True)
 last_seq = None
 stale = 0
 next_t = time.time()
