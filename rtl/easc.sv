@@ -1,73 +1,113 @@
 //============================================================================
-//  easc — Enhanced Apple Sound Chip, as the Quadra 800's IOSB carries it.
-//  Named easc, not asc, because it is NOT the Mac LC's part: that one is the
-//  V8's mono FIFO-only ASC (MacLC_MiSTer/rtl/asc.sv, MAME asc_v8_device).
-//  MAME wires ASC_EASC into the IOSB (apple/iosb.cpp:89) and routes channel 0
-//  to the left speaker and channel 1 to the right, so this part is STEREO,
-//  8-bit, 22257 Hz, and plays at full amplitude where the V8 plays at 1/8.
+//  easc — Enhanced Apple Sound Chip ("Batman"), as the IOSB / PrimeTime
+//  carries it.  NOT the Mac LC's part (the V8's mono FIFO-only ASC).
 //
-//  Both modes Mac OS actually uses are implemented:
+//  WHAT THE CHIP IS, and what each statement rests on
 //
-//    mode 1  FIFO — two independent 1024-byte FIFOs, A -> left, B -> right,
-//            popped at 22257 Hz.  This is what the Sound Manager drives for
-//            system beeps, alert sounds and every application that plays
-//            audio.  It is also the mode the ROM leaves the chip in after
-//            startup, so WITHOUT IT THE MACHINE IS SILENT AFTER THE CHIME —
-//            which is exactly what the previous revision of this file did:
-//            it forced the mixer to zero in every mode but 2.
+//  [HO]  Macintosh Hardware Overview, Apple, Feb 1991, "Sound Output Hardware"
+//        (pp. 44-45): Batman is an enhanced, pin-compatible ASC that REMOVES
+//        the wavetable synthesizer modes and adds improved interrupts, one
+//        channel of 8-bit sound input, full stereo mixing and panning,
+//        sample rate conversion and CD-XA decompression.
+//  [ROM] The LC 475 ROM (MD5 76FAB51D93F024D805FAFD8F5C8F46A3, base
+//        $40800000).  Addresses below are in that image.
+//  [EST] A reasoned estimate where neither says; named as one.
 //
-//    mode 2  WAVETABLE — four voices with a 24-bit phase/increment each,
-//            summed.  This is the boot chime, and it was all this file did.
+//  VERSION ($800) = $B0.  [ROM] $408042E8: for (version & $F0) == $B0 the
+//  ROM programs the $F00 block, and the code for decoder kind $0D (the
+//  MEMCjr machines, table $408A8680) sits INSIDE that branch ($40804328), so
+//  this machine's chip is a $Bx part.  The ROM names three: $B0, $BB, $BC.
+//  Only $B0 gets the $F08/$F28 register test ($4084871A) and the idle status
+//  $0F ($40849D74).  [EST] $B0 rather than $BB/$BC: those two are tested as
+//  parts without the $F08 mode registers, while the kind-$0D code writes the
+//  $F20 block directly ($40804344, $50F14F2F).  No Apple document at hand
+//  states the value.
 //
-//  Sample scaling follows MAME's EASC path (asc.cpp asc_easc_device::
-//  sound_stream_update): a FIFO byte is offset-binary, so the sample is
-//  (byte ^ 0x80) sign-extended and placed in the TOP 8 bits — full 16-bit
-//  amplitude, where the classic asc_device path plays at 1/8 of that.  That
-//  is the audible difference between this part and the LC's.  The wavetable
-//  sum is scaled to match (MAME: sum*256 against a 32768*4 full scale, i.e.
-//  sum*64), which is 6 dB louder than this file's previous <<< 5.
+//  WHAT THE ROM DOES AT STARTUP ($408BD250)
+//    version 0      -> $40807052, the Mac II four-voice wavetable chime.
+//    version $B0    -> a 'snd ' at $408C2722 (or $408BD4C4 if PRAM $89 bit 1):
+//                      22050 Hz, compressionID 6, 15-byte packets, i.e.
+//                      CD-XA ADPCM.  The ROM writes the rate to $F04/$F24
+//                      (rate * $FFFF / 44100), $82 to $F08/$F28, then feeds
+//                      the COMPRESSED bytes to both FIFOs, one byte each time
+//                      $804 bit 2 is set, and ends when bit 3 is set.
+//    other non-zero -> the same chime as raw 8-bit samples ($408C67BE).
+//  So with $B0 the chime needs the decoder in the chip.  The decoder here was
+//  checked against that: the decoded $408C2722 matches the raw copy at
+//  $408C67BE sample for sample (correlation 0.9998, low nibble first).
 //
-//  $806 VOLUME is applied to the output.  MAME stores it and ignores it, so
-//  the Sound control panel's slider did nothing; bits 7-5 are the eight
-//  volume steps the panel actually offers (QEMU's asc.c masks the register
-//  with 0xe0 for the same reason).  The gain table below is linear in that
-//  0..7 and reaches EXACTLY unity at 7, so a machine sitting at maximum
-//  sounds precisely as loud as it did before this was hooked up.
+//  REGISTERS (4 KB window; "ch" = $00 for A, $20 for B)
+//    $000-$3FF FIFO A, $400-$7FF FIFO B: 1024 bytes each [HO].
+//    $800 version   $B0.
+//    $801 mode      bits 1:0 stored [ROM test mask $03]; 1 = FIFO.  No
+//                   wavetable mode [HO]; the ROM never selects one on a
+//                   non-zero version.
+//    $802 control   stored, no function here [EST].
+//    $803 bit 7     clears both FIFOs [ROM $40845C90 pulses it].
+//    $804 status    LIVE, read-only: bit 0 A half-empty, 1 A empty,
+//                   2 B half-empty, 3 B empty.  [ROM] $40849D74 waits for
+//                   exactly $0F on an idle chip; the chime waits on bit 2 to
+//                   write and on bit 3 to finish.  A read clears the
+//                   interrupt [EST, as before].
+//    $806 volume    bits 7:5, eight steps [ROM test mask $E0; $408042E4].
+//    $807           stored only.
+//    $80A           bits 1:0 stored [ROM test mask $01].  Bit 0 is record
+//                   enable in the ROM's input test; there is NO sound input
+//                   here, so that test ($40849F4E) cannot pass.
+//    $F00+ch write pointer, $F02+ch read pointer (words, read-only) [EST;
+//                   the ROM only saves and restores them, $408B4D08].
+//    $F04+ch sample rate, word: rate * 65536 / 44100 [ROM $408BD342].  The
+//                   ROM's idle value is $812F = 22254 Hz ($40804376).  The
+//                   FIFO is popped at that rate and held between pops; the
+//                   chip's interpolating conversion to 44.1 kHz [HO] is not
+//                   modelled [EST].  Reset value $812F [EST].
+//    $F06+ch gain of this FIFO into the LEFT output, $F07+ch into the RIGHT;
+//                   $7F is full [ROM $408042F8 sets A = $7F,$00 and
+//                   B = $00,$7F; $4088C490 is the volume-step table].  Taken
+//                   as gain/128 [EST].
+//    $F08+ch bits 1:0 = 0 raw 8-bit, 1 or 2 CD-XA (the ROM maps
+//                   compressionID 5 -> 1, 6 -> 2, $408BD35A); bit 7 is set
+//                   with every start.  Bits 7,1,0 stored [ROM test values
+//                   $00-$03,$80-$83].  Modes 1, 2 and 3 decode alike here
+//                   [EST]; a write restarts the decoder at a packet boundary
+//                   with a cleared history [EST].
+//    $F09+ch bit 0 = 1 masks this FIFO's interrupt [ROM $40845C7E, $40849ECC].
+//                   Writing it 1 then 0 raises the interrupt again if the
+//                   FIFO is below half [ROM $40871B84 does exactly that to
+//                   restart it].  Reset 1 [EST].
+//    $F10-$F17+ch  CD-XA filter coefficients.  The ROM always loads
+//                   $0000,$003C,$CC73,$C962 ($40804382): K0 = 0,60,115,98 in
+//                   the low bytes, K1 = 0,0,-52,-55 in the high bytes, the
+//                   standard CD-XA set.  They are HARD-WIRED here and read
+//                   back as those values; other values are not supported
+//                   [EST, to save logic].
 //
-//  volume RESETS TO MAX, not to 0.  A guest that never writes $806 must not
-//  come up silent, and the boot chime is generated by the ROM before Mac OS
-//  has loaded any sound preference.
+//  CD-XA [ROM data + the standard format]: 15-byte packets, byte 0 = filter
+//  (bits 5:4) and range (bits 3:0), then 14 bytes = 28 four-bit samples, low
+//  nibble first.  s = (nibble << 12 >> range) + (K0*s1 + K1*s2) / 64,
+//  saturated to 16 bits.  A raw byte is offset binary in the top 8 bits.
 //
-//  Byte map (4 KB window at $50014000):
-//    $000-$3FF  FIFO A  / wavetable banks 0,1
-//    $400-$7FF  FIFO B  / wavetable banks 2,3
-//    $800 version (0 = classic ASC: the ROM then drives the classic
-//         register path rather than the EASC extended block at $F00, which
-//         Mac OS does not need and this file does not implement)
-//    $801 mode      $802 control   $803 fifomode (bit 7 = clear both FIFOs)
-//    $804 fifo status (RO)         $806 volume   $807 clock
-//    $810+ch*8  phase (24-bit in bytes 1..3 of the 4-byte slot)
-//    $814+ch*8  increment (same layout)
+//  INTERRUPT: an edge when a pop takes a FIFO below half, per FIFO, if not
+//  masked; cleared by a read of $804 or by masking.  Only in FIFO mode [EST].
+//
+//  LOGIC: one 16x10 multiplier (a DSP block) is shared by the decoder, the
+//  mixer and the volume, stepped by a small sequencer between samples, and
+//  the range shift is done a bit a clock.  The four wavetable voices
+//  (192 flip-flops, four 24-bit adders, two multipliers) are gone.
 //
 //  Beat slave: one aligned longword per sel pulse, big-endian byte lanes
-//  (be[3] = byte at a+0).
+//  (be[3] = byte at a+0).  A longword write to a FIFO carries up to four
+//  bytes, drained one per clock in memory order.
 //
-//  Storage: four easc_bank block RAMs (128 x 32) covering the 2 KB window.
-//  In wavetable mode each voice reads its own 512-byte bank on port B; in
-//  FIFO mode banks 0/1 carry FIFO A and banks 2/3 carry FIFO B, and port B
-//  free-runs at the read pointer.  Port A is the CPU's, muxed to the write
-//  pointer while a FIFO push is draining.  A flat wave[0:2047] with eight
-//  asynchronous read points cannot map to M10K and cost 7,781 ALUTs.
-//
-//  A longword CPU write in FIFO mode carries up to FOUR samples, and MAME's
-//  byte handler is called once per lane, so the lanes are drained one per
-//  clock in memory order.  The CPU cannot come back within four clocks.
+//  Storage: four easc_bank block RAMs (128 x 32): banks 0,1 = FIFO A,
+//  banks 2,3 = FIFO B.  Port A is the CPU's, or the push; port B free-runs at
+//  the read pointer.
 //============================================================================
 
 module easc
 #(
 	parameter SYS_CLK_HZ = 25_000_000,
-	parameter SAMPLE_HZ  = 22_257
+	parameter BASE_HZ    = 44_100
 )
 (
 	input         clk,
@@ -81,18 +121,21 @@ module easc
 	input  [31:0] wdata,
 	output [31:0] rdata,
 
-	output        irq,                     // half-empty / full, active high
+	output        irq,                     // FIFO half-empty, active high
 
 	output signed [15:0] sample_l,
 	output signed [15:0] sample_r
 );
 
-reg  [7:0] mode, control, fifomode, volume, clockreg;
-reg [23:0] phase [0:3];
-reg [23:0] incr  [0:3];
+reg  [1:0] mode;
+reg  [7:0] control, fifomode, volume, clockreg;
+reg  [1:0] recreg;
+reg [15:0] rate_a, rate_b;
+reg  [7:0] gl_a, gr_a, gl_b, gr_b;
+reg  [2:0] xm_a, xm_b;                 // {$F08 bit 7, bits 1:0}
+reg        dis_a, dis_b;
 
-wire fifo_mode = (mode == 8'd1);
-wire wt_mode   = (mode == 8'd2);
+wire fifo_mode = (mode == 2'd1);
 
 //----------------------------------------------------------------------------
 // FIFO state
@@ -100,25 +143,9 @@ wire wt_mode   = (mode == 8'd2);
 reg  [9:0] wrptr_a, rdptr_a, wrptr_b, rdptr_b;
 reg [10:0] cap_a, cap_b;               // 0..1024
 
-// Live status ($804), MAME asc.cpp bit order: 0 = A half-empty,
-// 1 = A full, 2 = B half-empty, 3 = B full.  A live view of the pointers is
-// what the silicon shows, and is what the ROM's FIFO POST (fill, then spin
-// until "full") needs.  lbmactwo/MacLC's asc.sv reads them live too.
-//
-// Bits 1/3 are FULL, not "empty or full".  They used to read
-// (cap == 0) || (cap >= 1023), which reports an EMPTY FIFO as FULL -- and a
-// guest that fills until the full flag sets then writes nothing at all.  With
-// no bytes queued nothing ever pops, so the half-empty edge never fires and no
-// refill interrupt is ever raised: the wait never ends, with the interrupt
-// connected or not.  That wedged Mac OS at the desktop with a watch cursor and
-// a stopped menu-bar clock while ADB kept tracking the mouse at interrupt
-// level.  The old asc_wavetable returned 0x00 for this register, which is why
-// the fault only appeared once the FIFO went in.
-wire [7:0] fifo_stat = {4'b0,
-                        (cap_b >= 11'd1023),
-                        (cap_b < 512),
-                        (cap_a >= 11'd1023),
-                        (cap_a < 512)};
+wire half_a = (cap_a < 11'd512);
+wire half_b = (cap_b < 11'd512);
+wire [7:0] fifo_stat = {4'b0, (cap_b == 0), half_b, (cap_a == 0), half_a};
 
 //----------------------------------------------------------------------------
 // CPU write lane drain (FIFO mode only)
@@ -143,7 +170,6 @@ wire [31:0] bank_qa [0:3];
 wire [31:0] bank_qb [0:3];
 wire        cpu_wr = ce && sel && write && !a[11] && !fifo_mode;
 
-// port A is the CPU's, except while a FIFO push is draining
 wire  [6:0] pa_addr = push_do ? push_ptr[8:2] : a[8:2];
 wire  [3:0] pa_be   = push_do ? (4'b1000 >> push_ptr[1:0]) : be;
 wire [31:0] pa_data = push_do ? {4{push_byte}} : wdata;
@@ -152,12 +178,6 @@ wire  [1:0] pa_bank = push_do ? {push_to_b, push_ptr[9]} : a[10:9];
 generate
 	genvar gi;
 	for (gi = 0; gi < 4; gi = gi + 1) begin : banks
-		// port B: the voice's own bank in wavetable mode; the FIFO read
-		// pointer in FIFO mode (banks 0/1 = A, banks 2/3 = B).  It free-runs,
-		// so q_b lags the pointer by a clock -- invisible when pops are
-		// One sound sample apart.
-		wire [6:0] pb_addr = fifo_mode ? (gi[1] ? rdptr_b[8:2] : rdptr_a[8:2])
-		                               : phase[gi][23:17];
 		easc_bank bank
 		(
 			.clk     (clk),
@@ -167,7 +187,7 @@ generate
 			.we_a    ((push_do && pa_bank == gi[1:0]) ||
 			          (cpu_wr  && a[10:9] == gi[1:0])),
 			.q_a     (bank_qa[gi]),
-			.addr_b  (pb_addr),
+			.addr_b  (gi[1] ? rdptr_b[8:2] : rdptr_a[8:2]),
 			.q_b     (bank_qb[gi])
 		);
 	end
@@ -186,187 +206,315 @@ wire [7:0] fifo_a_byte = lane_byte(rdptr_a[9] ? bank_qb[1] : bank_qb[0], rdptr_a
 wire [7:0] fifo_b_byte = lane_byte(rdptr_b[9] ? bank_qb[3] : bank_qb[2], rdptr_b[1:0]);
 
 //----------------------------------------------------------------------------
-// registers
+// register read
 //----------------------------------------------------------------------------
 function automatic [7:0] rd_byte(input [11:0] ba);
-	case (ba[10:0])
-		11'h001: rd_byte = mode;
-		11'h002: rd_byte = control;
-		11'h003: rd_byte = fifomode;
-		11'h004: rd_byte = fifo_stat;
-		11'h006: rd_byte = volume;
-		11'h007: rd_byte = clockreg;
-		default:
-			if (ba[10:0] >= 11'h010 && ba[10:0] < 11'h030) begin
-				case (ba[1:0])
-				2'd1: rd_byte = ba[2] ? incr[ba[4:3]][23:16] : phase[ba[4:3]][23:16];
-				2'd2: rd_byte = ba[2] ? incr[ba[4:3]][15:8]  : phase[ba[4:3]][15:8];
-				2'd3: rd_byte = ba[2] ? incr[ba[4:3]][7:0]   : phase[ba[4:3]][7:0];
-				default: rd_byte = 8'h00;
-				endcase
-			end
-			else rd_byte = 8'h00;          // version, everything else
-	endcase
+	reg b;
+	begin
+		b = ba[5];
+		rd_byte = 8'h00;
+		if (ba[10:8] == 3'd0)
+			case (ba[7:0])
+				8'h00: rd_byte = 8'hB0;
+				8'h01: rd_byte = {6'd0, mode};
+				8'h02: rd_byte = control;
+				8'h03: rd_byte = fifomode;
+				8'h04: rd_byte = fifo_stat;
+				8'h06: rd_byte = volume;
+				8'h07: rd_byte = clockreg;
+				8'h0A: rd_byte = {6'd0, recreg};
+				default: ;
+			endcase
+		else if (ba[10:6] == 5'b11100)
+			case (ba[4:0])
+				5'h00: rd_byte = {6'd0, b ? wrptr_b[9:8] : wrptr_a[9:8]};
+				5'h01: rd_byte = b ? wrptr_b[7:0] : wrptr_a[7:0];
+				5'h02: rd_byte = {6'd0, b ? rdptr_b[9:8] : rdptr_a[9:8]};
+				5'h03: rd_byte = b ? rdptr_b[7:0] : rdptr_a[7:0];
+				5'h04: rd_byte = b ? rate_b[15:8] : rate_a[15:8];
+				5'h05: rd_byte = b ? rate_b[7:0]  : rate_a[7:0];
+				5'h06: rd_byte = b ? gl_b : gl_a;
+				5'h07: rd_byte = b ? gr_b : gr_a;
+				5'h08: rd_byte = b ? {xm_b[2], 5'd0, xm_b[1:0]} : {xm_a[2], 5'd0, xm_a[1:0]};
+				5'h09: rd_byte = {7'd0, b ? dis_b : dis_a};
+				5'h13: rd_byte = 8'h3C;
+				5'h14: rd_byte = 8'hCC;
+				5'h15: rd_byte = 8'h73;
+				5'h16: rd_byte = 8'hC9;
+				5'h17: rd_byte = 8'h62;
+				default: ;
+			endcase
+	end
 endfunction
 
 assign rdata = a[11] ? {rd_byte({a, 2'd0}), rd_byte({a, 2'd1}),
                         rd_byte({a, 2'd2}), rd_byte({a, 2'd3})}
                      : bank_qa[a[10:9]];
 
-// a read of the status register clears the interrupt (MAME clears R_FIFOSTAT
-// on read; here the flags are live, so only the irq latch is cleared)
 wire stat_read = ce && sel && !write && a[11] &&
                  (({a, 2'd0} & 12'h7FC) == 12'h004);
 
-wire tick;
-rate_enable #(.CLK_HZ(SYS_CLK_HZ), .RATE_HZ(SAMPLE_HZ)) sample_rate (
-	.clk(clk), .nreset(nreset), .ce(ce), .tick(tick)
+//----------------------------------------------------------------------------
+// sample clocks: 44.1 kHz scaled by each FIFO's rate word
+//----------------------------------------------------------------------------
+wire base_tick;
+rate_enable #(.CLK_HZ(SYS_CLK_HZ), .RATE_HZ(BASE_HZ)) sample_rate (
+	.clk(clk), .nreset(nreset), .ce(ce), .tick(base_tick)
 );
+reg  [15:0] nco_a, nco_b;
+wire [16:0] nco_a_n = {1'b0, nco_a} + {1'b0, rate_a};
+wire [16:0] nco_b_n = {1'b0, nco_b} + {1'b0, rate_b};
 
 //----------------------------------------------------------------------------
-// wavetable mixer (mode 2)
+// decoder / mixer sequencer around one multiplier
 //----------------------------------------------------------------------------
-reg [1:0] lane_r [0:3];
-always @(posedge clk) begin
-	lane_r[0] <= phase[0][16:15];
-	lane_r[1] <= phase[1][16:15];
-	lane_r[2] <= phase[2][16:15];
-	lane_r[3] <= phase[3][16:15];
-end
+localparam [4:0] S_IDLE = 5'd0,  S_FETCH = 5'd1, S_WAIT = 5'd2,
+                 S_D0 = 5'd3, S_D1 = 5'd4, S_D2 = 5'd5, S_D3 = 5'd6, S_D4 = 5'd7,
+                 S_M0 = 5'd8, S_M1 = 5'd9, S_M2 = 5'd10, S_M3 = 5'd11, S_M4 = 5'd12,
+                 S_M5 = 5'd13, S_M6 = 5'd14, S_M7 = 5'd15, S_M8 = 5'd16;
+reg  [4:0] st;
+reg        ch;                         // channel in work: 0 = A, 1 = B
+reg  [1:0] pend;                       // sample due
+reg        need_mix;
+reg signed [15:0] s1_a, s2_a, s1_b, s2_b;   // s1 = the FIFO's current sample
+reg  [5:0] hdr_a, hdr_b;               // {filter, range}
+reg  [3:0] pos_a, pos_b;               // byte within the 15-byte packet
+reg  [3:0] hin_a, hin_b;               // high nibble waiting
+reg        hav_a, hav_b;
+reg        pshd_a, pshd_b;             // pushed last clock: q_b not yet valid
 
-wire [7:0] s0 = lane_byte(bank_qb[0], lane_r[0]);
-wire [7:0] s1 = lane_byte(bank_qb[1], lane_r[1]);
-wire [7:0] s2 = lane_byte(bank_qb[2], lane_r[2]);
-wire [7:0] s3 = lane_byte(bank_qb[3], lane_r[3]);
-wire signed [10:0] acc = {3'd0, s0} + {3'd0, s1} + {3'd0, s2} + {3'd0, s3}
-                       - 11'd512;
+wire [7:0] f_byte = ch ? fifo_b_byte : fifo_a_byte;
+wire       f_have = ch ? (cap_b != 0 && !pshd_b) : (cap_a != 0 && !pshd_a);
+wire       f_none = ch ? (cap_b == 0) : (cap_a == 0);
+wire       x_on   = ch ? |xm_b[1:0] : |xm_a[1:0];
+wire [3:0] x_pos  = ch ? pos_b : pos_a;
+wire       x_hav  = ch ? hav_b : hav_a;
+wire [5:0] x_hdr  = ch ? hdr_b : hdr_a;
+wire signed [15:0] x_s1 = ch ? s1_b : s1_a;
+wire signed [15:0] x_s2 = ch ? s2_b : s2_a;
 
+reg signed  [9:0] k0, k1;
+always @* case (x_hdr[5:4])
+	2'd0: begin k0 = 10'sd0;   k1 = 10'sd0;   end
+	2'd1: begin k0 = 10'sd60;  k1 = 10'sd0;   end
+	2'd2: begin k0 = 10'sd115; k1 = -10'sd52; end
+	default: begin k0 = 10'sd98; k1 = -10'sd55; end
+endcase
+
+// $806 bits 7-5: eight steps, x*256/7 rounded, exactly unity at 7
+reg [9:0] gvol;
+always @* case (volume[7:5])
+	3'd0: gvol = 10'd0;
+	3'd1: gvol = 10'd37;
+	3'd2: gvol = 10'd73;
+	3'd3: gvol = 10'd110;
+	3'd4: gvol = 10'd146;
+	3'd5: gvol = 10'd183;
+	3'd6: gvol = 10'd219;
+	default: gvol = 10'd256;
+endcase
+
+reg signed [15:0] xr;
+reg signed  [9:0] yr;
+reg signed [25:0] prod;
+reg signed [26:0] acc;
+reg signed [15:0] nibt;                // nibble term, shifted down by the range
+reg         [3:0] shc;
 reg signed [15:0] out_l, out_r;
 
-// $806 bits 7-5: eight volume steps, x*256/7 rounded so step 7 is exactly
-// unity (256 >> 8 == 1.0) and step 0 is silence.  Registered rather than
-// combinational: clk_sys has ~0 ns margin (the critical path is inside the
-// CPU core) and this keeps a 16x10 multiply out of the output path's cone.
-function automatic signed [15:0] apply_vol(input signed [15:0] smp);
-	reg [8:0] g;
-	reg signed [25:0] p;
-	begin
-		case (volume[7:5])
-			3'd0: g = 9'd0;
-			3'd1: g = 9'd37;
-			3'd2: g = 9'd73;
-			3'd3: g = 9'd110;
-			3'd4: g = 9'd146;
-			3'd5: g = 9'd183;
-			3'd6: g = 9'd219;
-			default: g = 9'd256;
-		endcase
-		p = smp * $signed({1'b0, g});
-		apply_vol = p[23:8];
-	end
+function automatic signed [15:0] sat16(input signed [26:0] v);
+	if (v > 27'sd32767)       sat16 = 16'sh7FFF;
+	else if (v < -27'sd32768) sat16 = 16'sh8000;
+	else                      sat16 = v[15:0];
 endfunction
 
-reg signed [15:0] vol_l, vol_r;
-always @(posedge clk) begin
-	vol_l <= apply_vol(out_l);
-	vol_r <= apply_vol(out_r);
-end
-assign sample_l = vol_l;
-assign sample_r = vol_r;
+wire signed [26:0] acc_d6  = acc >>> 6;
+wire signed [26:0] acc_d7  = acc >>> 7;
+wire signed [26:0] dec_v   = acc_d6 + {{11{nibt[15]}}, nibt};
+wire signed [15:0] mix_sat = sat16(acc_d7);
 
-// pop happens on the sample tick when the FIFO has anything left; push is
-// one drained lane per clock.  Both can land on the same clock, so each
-// pointer has a single driver and the capacity takes the net change.
-wire pop_a = tick && fifo_mode && (cap_a != 0);
-wire pop_b = tick && fifo_mode && (cap_b != 0);
+assign sample_l = out_l;
+assign sample_r = out_r;
+
+// pops come from the sequencer, pushes from the lane drain
+wire take  = (st == S_FETCH) && fifo_mode && f_have && !(x_on && x_hav);
+wire pop_a = take && !ch;
+wire pop_b = take &&  ch;
 wire psh_a = push_do && !push_to_b;
 wire psh_b = push_do &&  push_to_b;
 
-// interrupt edges: the pop that crosses half-empty, and the push that fills
-wire half_cross_a = pop_a && (cap_a == 11'd511);
-wire half_cross_b = pop_b && (cap_b == 11'd511);
-wire fill_a       = psh_a && (cap_a >= 11'd1022);
-wire fill_b       = psh_b && (cap_b >= 11'd1022);
+reg  pend_irq_a, pend_irq_b;
+assign irq = pend_irq_a | pend_irq_b;
 
-reg irq_r;
-assign irq = irq_r;
-
+//----------------------------------------------------------------------------
+// register write
+//----------------------------------------------------------------------------
 task automatic wr_byte(input [11:0] ba, input [7:0] d);
-	case (ba[10:0])
-		11'h001: mode     <= d[1:0];      // only bits 0,1 are writable (MAME)
-		11'h002: control  <= d;
-		11'h003: fifomode <= d;
-		11'h006: volume   <= d;
-		11'h007: clockreg <= d;
-		default:
-			if (ba[10:0] >= 11'h010 && ba[10:0] < 11'h030) begin
-				case (ba[1:0])
-				2'd1: if (ba[2]) incr[ba[4:3]][23:16] <= d;
-				      else       phase[ba[4:3]][23:16] <= d;
-				2'd2: if (ba[2]) incr[ba[4:3]][15:8] <= d;
-				      else       phase[ba[4:3]][15:8] <= d;
-				2'd3: if (ba[2]) incr[ba[4:3]][7:0] <= d;
-				      else       phase[ba[4:3]][7:0] <= d;
+	if (ba[10:8] == 3'd0)
+		case (ba[7:0])
+			8'h01: mode     <= d[1:0];
+			8'h02: control  <= d;
+			8'h03: fifomode <= d;
+			8'h06: volume   <= d;
+			8'h07: clockreg <= d;
+			8'h0A: recreg   <= d[1:0];
+			default: ;
+		endcase
+	else if (ba[10:6] == 5'b11100) begin
+		if (!ba[5])
+			case (ba[4:0])
+				5'h04: rate_a[15:8] <= d;
+				5'h05: rate_a[7:0]  <= d;
+				5'h06: gl_a <= d;
+				5'h07: gr_a <= d;
+				5'h08: xm_a <= {d[7], d[1:0]};
+				5'h09: dis_a <= d[0];
 				default: ;
-				endcase
-			end
-	endcase
+			endcase
+		else
+			case (ba[4:0])
+				5'h04: rate_b[15:8] <= d;
+				5'h05: rate_b[7:0]  <= d;
+				5'h06: gl_b <= d;
+				5'h07: gr_b <= d;
+				5'h08: xm_b <= {d[7], d[1:0]};
+				5'h09: dis_b <= d[0];
+				default: ;
+			endcase
+	end
 endtask
 
-// a mode change, or fifomode bit 7, resets both FIFOs (MAME asc.cpp:439/459)
 wire reg_wr      = ce && sel && write && a[11];
-wire mode_wr     = reg_wr && (({a, 2'd0} & 12'h7FC) == 12'h000) && be[2];
-wire mode_change = mode_wr && (wdata[23:16] & 8'h03) != mode;
-wire fifo_clear  = (reg_wr && (({a, 2'd0} & 12'h7FC) == 12'h000) && be[0]
-                    && wdata[7]) || mode_change;
+wire r800_wr     = reg_wr && (({a, 2'd0} & 12'h7FC) == 12'h000);
+wire mode_change = r800_wr && be[2] && (wdata[17:16] != mode);
+wire fifo_clear  = (r800_wr && be[0] && wdata[7]) || mode_change;
+// $F08 (lane 0) and $F09 (lane 1) of the longword at $F08 / $F28
+wire rf08_wr     = reg_wr && (({a, 2'd0} & 12'h7DC) == 12'h708);
+wire xm_wr_a     = rf08_wr && !a[5] && be[3];
+wire xm_wr_b     = rf08_wr &&  a[5] && be[3];
+wire dis_wr_a    = rf08_wr && !a[5] && be[2];
+wire dis_wr_b    = rf08_wr &&  a[5] && be[2];
 
 always @(posedge clk) begin
 	if (!nreset) begin
 		mode <= 0; control <= 0; fifomode <= 0; volume <= 8'hE0; clockreg <= 0;
-		phase[0] <= 0; phase[1] <= 0; phase[2] <= 0; phase[3] <= 0;
-		incr[0] <= 0; incr[1] <= 0; incr[2] <= 0; incr[3] <= 0;
-		out_l <= 0; out_r <= 0;
+		recreg <= 0;
+		rate_a <= 16'h812F; rate_b <= 16'h812F;
+		gl_a <= 8'h7F; gr_a <= 8'h00; gl_b <= 8'h00; gr_b <= 8'h7F;
+		xm_a <= 0; xm_b <= 0; dis_a <= 1'b1; dis_b <= 1'b1;
+		nco_a <= 0; nco_b <= 0;
 		wrptr_a <= 0; rdptr_a <= 0; cap_a <= 0;
 		wrptr_b <= 0; rdptr_b <= 0; cap_b <= 0;
 		push_be <= 0; push_data <= 0; push_to_b <= 0;
-		irq_r <= 0;
+		pshd_a <= 0; pshd_b <= 0;
+		st <= S_IDLE; ch <= 0; pend <= 0; need_mix <= 0;
+		s1_a <= 0; s2_a <= 0; s1_b <= 0; s2_b <= 0;
+		hdr_a <= 0; hdr_b <= 0; pos_a <= 0; pos_b <= 0;
+		hin_a <= 0; hin_b <= 0; hav_a <= 0; hav_b <= 0;
+		xr <= 0; yr <= 0; prod <= 0; acc <= 0; nibt <= 0; shc <= 0;
+		out_l <= 0; out_r <= 0;
+		pend_irq_a <= 0; pend_irq_b <= 0;
 	end
 	else begin
+		prod <= xr * yr;
+		if (shc != 0) begin
+			nibt <= nibt >>> 1;
+			shc  <= shc - 1'b1;
+		end
 
-		// ---- output ------------------------------------------------------
-		// mode 0 holds the last sample (MAME): a hard 0 clicks on every sound
-		if (tick) begin
-			if (wt_mode) begin
-				phase[0] <= phase[0] + incr[0];
-				phase[1] <= phase[1] + incr[1];
-				phase[2] <= phase[2] + incr[2];
-				phase[3] <= phase[3] + incr[3];
-				out_l <= acc <<< 6;
-				out_r <= acc <<< 6;
+		// ---- sample clocks ---------------------------------------------
+		if (base_tick) begin
+			nco_a <= nco_a_n[15:0];
+			nco_b <= nco_b_n[15:0];
+		end
+
+		// ---- sequencer -------------------------------------------------
+		case (st)
+		S_IDLE:
+			if (pend != 0) begin
+				ch <= !pend[0];
+				st <= S_FETCH;
 			end
-			else if (fifo_mode) begin
-				// hold the last sample when a FIFO runs dry (MAME)
-				if (cap_a != 0) begin
-					out_l <= {~fifo_a_byte[7], fifo_a_byte[6:0], 8'h00};
-					// CONTROL bit 1 is CONTROL_STEREO.  MAME's EASC path
-					// ignores it and always plays A left / B right; its
-					// classic asc_device mirrors A to both channels when the
-					// bit is clear.  Mirroring is kept here because a guest
-					// that says "mono" writes only FIFO A, and playing that
-					// out of one speaker is worse than any fidelity this
-					// costs -- the EASC model in MAME is explicitly
-					// incomplete (it does not do the channel volumes either).
-					if (!control[1])
-						out_r <= {~fifo_a_byte[7], fifo_a_byte[6:0], 8'h00};
+			else if (need_mix) st <= S_M0;
+
+		// one sample for channel ch.  Mode 0 and an empty FIFO hold the
+		// last sample: a hard 0 would click on every sound.
+		S_FETCH:
+			if (!fifo_mode || (f_none && !(x_on && x_hav))) begin
+				pend[ch] <= 1'b0;
+				st <= S_IDLE;
+			end
+			else if (x_on && x_hav) begin              // second half of a byte
+				if (ch) hav_b <= 1'b0; else hav_a <= 1'b0;
+				nibt <= {(ch ? hin_b : hin_a), 12'd0};
+				shc  <= x_hdr[3:0];
+				st   <= S_D0;
+			end
+			else if (f_have) begin
+				if (!x_on) begin                       // raw 8-bit
+					if (ch) s1_b <= {~f_byte[7], f_byte[6:0], 8'h00};
+					else    s1_a <= {~f_byte[7], f_byte[6:0], 8'h00};
+					pend[ch] <= 1'b0;
+					need_mix <= 1'b1;
+					st <= S_IDLE;
 				end
-				if (control[1] && cap_b != 0)
-					out_r <= {~fifo_b_byte[7], fifo_b_byte[6:0], 8'h00};
+				else if (x_pos == 4'd0) begin          // packet header
+					if (ch) begin hdr_b <= f_byte[5:0]; pos_b <= 4'd1; end
+					else    begin hdr_a <= f_byte[5:0]; pos_a <= 4'd1; end
+					st <= S_WAIT;
+				end
+				else begin                             // low nibble first
+					if (ch) begin
+						hin_b <= f_byte[7:4]; hav_b <= 1'b1;
+						pos_b <= (pos_b == 4'd14) ? 4'd0 : pos_b + 1'b1;
+					end
+					else begin
+						hin_a <= f_byte[7:4]; hav_a <= 1'b1;
+						pos_a <= (pos_a == 4'd14) ? 4'd0 : pos_a + 1'b1;
+					end
+					nibt <= {f_byte[3:0], 12'd0};
+					shc  <= x_hdr[3:0];
+					st   <= S_D0;
+				end
 			end
+		S_WAIT: st <= S_FETCH;                         // q_b follows the pointer
+
+		// s = nibble term + (K0*s1 + K1*s2) / 64
+		S_D0: begin xr <= x_s1; yr <= k0; st <= S_D1; end
+		S_D1: begin xr <= x_s2; yr <= k1; st <= S_D2; end
+		S_D2: begin acc <= {prod[25], prod}; st <= S_D3; end
+		S_D3: begin acc <= acc + {prod[25], prod}; st <= S_D4; end
+		S_D4:
+			if (shc == 0) begin
+				if (ch) begin s2_b <= s1_b; s1_b <= sat16(dec_v); end
+				else    begin s2_a <= s1_a; s1_a <= sat16(dec_v); end
+				pend[ch] <= 1'b0;
+				need_mix <= 1'b1;
+				st <= S_IDLE;
+			end
+
+		// left = A*gl_a + B*gl_b, right = A*gr_a + B*gr_b, then $806
+		S_M0: begin xr <= s1_a; yr <= {2'b0, gl_a}; st <= S_M1; end
+		S_M1: begin xr <= s1_b; yr <= {2'b0, gl_b}; st <= S_M2; end
+		S_M2: begin acc <= {prod[25], prod}; xr <= s1_a; yr <= {2'b0, gr_a}; st <= S_M3; end
+		S_M3: begin acc <= acc + {prod[25], prod}; xr <= s1_b; yr <= {2'b0, gr_b}; st <= S_M4; end
+		S_M4: begin xr <= mix_sat; yr <= gvol; acc <= {prod[25], prod}; st <= S_M5; end
+		S_M5: begin acc <= acc + {prod[25], prod}; st <= S_M6; end
+		S_M6: begin out_l <= prod[23:8]; xr <= mix_sat; yr <= gvol; st <= S_M7; end
+		S_M7: st <= S_M8;
+		S_M8: begin out_r <= prod[23:8]; need_mix <= 1'b0; st <= S_IDLE; end
+		default: st <= S_IDLE;
+		endcase
+
+		// a due sample is latched after the sequencer so a tick is never lost
+		if (base_tick && fifo_mode) begin
+			if (nco_a_n[16]) pend[0] <= 1'b1;
+			if (nco_b_n[16]) pend[1] <= 1'b1;
 		end
 
 		// ---- FIFO pointers -----------------------------------------------
-		// pop and push can land on the same clock; each pointer has one
-		// driver and the capacity picks up the net change.
+		pshd_a <= psh_a;
+		pshd_b <= psh_b;
 		if (fifo_clear) begin
 			wrptr_a <= 0; rdptr_a <= 0; cap_a <= 0;
 			wrptr_b <= 0; rdptr_b <= 0; cap_b <= 0;
@@ -402,22 +550,6 @@ always @(posedge clk) begin
 				push_be <= 4'd0;              // FIFO full: drop the rest
 		end
 
-		// ---- interrupt ---------------------------------------------------
-		// EDGE, not level. MAME raises it when a pop takes the capacity down
-		// THROUGH the half-way mark (asc.cpp keeps the cap from before the
-		// decrement precisely so the last sample does not re-trigger) and
-		// when a push fills the FIFO; it is cleared by a FIFOSTAT read.
-		//
-		// A level condition here -- "assert whenever cap < 512" -- turns an
-		// idle chip left in FIFO mode into a 22 kHz interrupt source that the
-		// guest cannot switch off, because an empty FIFO is permanently under
-		// half full. That is an interrupt storm of exactly the kind MacLC's
-		// asc.sv header warns about, and it hangs the machine.
-		if (stat_read)
-			irq_r <= 1'b0;
-		else if (half_cross_a || half_cross_b || fill_a || fill_b)
-			irq_r <= 1'b1;
-
 		// ---- register writes ---------------------------------------------
 		if (reg_wr) begin
 			if (be[3]) wr_byte({a, 2'd0}, wdata[31:24]);
@@ -425,6 +557,28 @@ always @(posedge clk) begin
 			if (be[1]) wr_byte({a, 2'd2}, wdata[15:8]);
 			if (be[0]) wr_byte({a, 2'd3}, wdata[7:0]);
 		end
+
+		// a mode write or a FIFO clear restarts the decoder at a packet
+		// boundary; the mode write also clears its history
+		if (xm_wr_a || fifo_clear) begin pos_a <= 0; hav_a <= 1'b0; end
+		if (xm_wr_b || fifo_clear) begin pos_b <= 0; hav_b <= 1'b0; end
+		if (xm_wr_a) begin s1_a <= 0; s2_a <= 0; need_mix <= 1'b1; end
+		if (xm_wr_b) begin s1_b <= 0; s2_b <= 0; need_mix <= 1'b1; end
+
+		// ---- interrupt ---------------------------------------------------
+		// EDGE, not level: an idle chip left in FIFO mode is permanently
+		// below half and must not become an interrupt source the guest
+		// cannot switch off.
+		if (stat_read || (dis_wr_a && wdata[16]))
+			pend_irq_a <= 1'b0;
+		else if (fifo_mode && ((pop_a && cap_a == 11'd512 && !dis_a) ||
+		                       (dis_wr_a && !wdata[16] && dis_a && half_a)))
+			pend_irq_a <= 1'b1;
+		if (stat_read || (dis_wr_b && wdata[16]))
+			pend_irq_b <= 1'b0;
+		else if (fifo_mode && ((pop_b && cap_b == 11'd512 && !dis_b) ||
+		                       (dis_wr_b && !wdata[16] && dis_b && half_b)))
+			pend_irq_b <= 1'b1;
 	end
 end
 
@@ -433,7 +587,7 @@ endmodule
 //============================================================================
 //  easc_bank — one 512-byte quarter of the sample window as 128 x 32 block
 //  RAM.  Port A: CPU or FIFO-push read/write with byte enables.  Port B:
-//  the voice's (or the FIFO's) read.  Both reads are registered (M10K
+//  the FIFO's read.  Both reads are registered (M10K
 //  semantics).  Mixed-port read-during-write is DONT_CARE on hardware and
 //  old-data in the sim branch — only reachable by a write racing a read of
 //  the same longword.
