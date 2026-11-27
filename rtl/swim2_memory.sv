@@ -25,10 +25,10 @@ module swim2_memory (
     output       rd_ack,
     output [7:0] rd_data,
     output       beat_req,
-    output reg   beat_we = 0,
-    output reg [26:2] beat_addr = 0,
-    output reg [3:0] beat_be = 0,
-    output reg [31:0] beat_wdata = 0,
+    output       beat_we,
+    output [26:2] beat_addr,
+    output [3:0] beat_be,
+    output [31:0] beat_wdata,
     input        beat_ack,
     input [31:0] beat_rdata,
     input        beat_busy,
@@ -63,7 +63,21 @@ wire reply = nreset && !init && !discard &&
 
 assign memory_ready = nreset && !init && sdram_sz[15] &&
                       (sdram_sz[1:0] == 2 || sdram_sz[1:0] == 3) && geometry_valid;
-assign beat_req = !init && state == WAIT_ACK && !beat_ack;
+// The machine's beat goes to the bridge in the clock it is selected, not
+// the clock after: with no client ahead of it the arbitration's register
+// was one clk_sys on every RAM line read (13 of them a line on the board).
+// The registers below still load the same fields in that clock and carry
+// the beat from WAIT_ACK on, so the bridge sees one request, held.
+wire cpu_now = !init && nreset && state == IDLE && !beat_ack && selected == CPU;
+reg        beat_we_r = 0;
+reg [26:2] beat_addr_r = 0;
+reg  [3:0] beat_be_r = 0;
+reg [31:0] beat_wdata_r = 0;
+assign beat_we    = cpu_now ? cpu_we    : beat_we_r;
+assign beat_addr  = cpu_now ? cpu_addr  : beat_addr_r;
+assign beat_be    = cpu_now ? cpu_be    : beat_be_r;
+assign beat_wdata = cpu_now ? cpu_wdata : beat_wdata_r;
+assign beat_req = (!init && state == WAIT_ACK && !beat_ack) || cpu_now;
 assign cpu_ack = reply && state == WAIT_ACK && owner == CPU;
 assign cpu_rdata = beat_rdata;
 assign load_ack = reply && owner == LOAD;
@@ -106,15 +120,15 @@ always @(posedge clk) begin
                 next_owner <= selected[1:0] + 2'd1;
                 discard <= 0;
                 if (selected == CPU) begin
-                    beat_we <= cpu_we;
-                    beat_addr <= cpu_addr;
-                    beat_be <= cpu_be;
-                    beat_wdata <= cpu_wdata;
+                    beat_we_r <= cpu_we;
+                    beat_addr_r <= cpu_addr;
+                    beat_be_r <= cpu_be;
+                    beat_wdata_r <= cpu_wdata;
                 end else begin
-                    beat_we <= selected != READ;
-                    beat_addr <= IMAGE_BASE[26:2] + {5'd0, offset[21:2]};
-                    beat_be <= selected == READ ? 4'b1111 : offset[1] ? 4'b0011 : 4'b1100;
-                    beat_wdata <= {word_data, word_data};
+                    beat_we_r <= selected != READ;
+                    beat_addr_r <= IMAGE_BASE[26:2] + {5'd0, offset[21:2]};
+                    beat_be_r <= selected == READ ? 4'b1111 : offset[1] ? 4'b0011 : 4'b1100;
+                    beat_wdata_r <= {word_data, word_data};
                     byte_lane <= offset[1:0];
                 end
                 state <= WAIT_ACK;

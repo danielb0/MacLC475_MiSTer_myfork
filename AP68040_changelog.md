@@ -435,3 +435,36 @@ loses a clock; the store buffer lets a read pass only one queued write.
 Entries 12-16 verified together: tests/timing sets 1-4 (nothing under its
 figure that was not before), run_cpu040 smoke/lc040/machine/mmu/profile,
 memsweep 360 of 360. Not yet on the board.
+
+## Machine side: the RAM line read (2026-11-27; not the CPU)
+
+Board counters under Norton's CPU tests (build 10, local/shots/perf
+analysis_norton_cpu_20261127_104603.txt): every RAM data read in them is a
+data-cache line fill, and a line read holds the CPU's bus 13 clocks (17
+behind queued writes). Instruction spends 28% of its clocks there, Tree
+22%, BMove/A 58%. A bench with the real bridge, controller and a chip
+model (local/tests/linetrace, not tracked) reproduces 12/13/14 by the
+SDRAM's row state and 17.2 behind a line write; about 9 of the clocks are
+the SDRAM's own, the rest registering stages. No Apple document gives the
+LC 475's RAM timing; the estimate noted above is 10 (4-2-2-2).
+
+- **17. `swim2_memory` passes the machine's beat in the clock it selects
+  it.** With SWIM2 defined (the board build) every RAM beat went through
+  the floppy image arbiter's request register: one clock a line read. The
+  bridge now sees the request in the selecting clock; the registers carry
+  it from the next. Floppy clients are selected as before.
+- **18. A line's second beat is acknowledged the clock the line turns
+  valid** (`lc475.sv` `bus_tail_wait`). The first long word is
+  acknowledged a clock before the bridge publishes the whole line, so the
+  burst's look-ahead missed and the second beat took two more clocks.
+- **After** (line read, clocks; arbiter in the path): row open 12.6 ->
+  10.6, a new row every line 13.9 -> 11.9, behind a line write 17.2 ->
+  16.2. Every long word of every fill is checked against the chip model.
+- **Verified:** linetrace (18 configurations), run_cpu040 smoke/machine/
+  profile/mmu. Not run: `tests/tb_swim2_memory.sv` (it needs
+  `tests/tb_sdram.sv`, which is not in the repository), so the arbiter with
+  floppy clients active is checked by reading only. Not yet on the board.
+- **Left:** the request is registered in lc475 and again in the bridge (1
+  clock); a read waits for the whole write FIFO, whose drain takes 7
+  clk_ram a long word, and its read pointer crosses through an extra
+  register (2-3 clocks behind writes).

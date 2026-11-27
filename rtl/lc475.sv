@@ -232,8 +232,28 @@ reg  [31:0] bus_line_rdata;
 reg         bus_miss_ack;
 reg  [31:0] bus_miss_rdata;
 
-assign bus_ack   = bus_line_ack || bus_miss_ack || bus_ack_adapter || bus_vram_wr_now;
+// A RAM line's second beat (2026-11-27).  The first long word of a missed
+// line is acknowledged (bus_miss_ack) one clock before the bridge marks the
+// whole line valid, so the burst's look-ahead found nothing in that clock
+// and the second beat went the ordinary way: matched in the next clock,
+// acknowledged in the one after.  bus_tail_wait remembers, from the first
+// beat's acknowledge, that the next beat of that line is owed; the clock
+// the line turns valid it is acknowledged from the retained line, and the
+// look-ahead carries on from there.  Every guard that holds a request off
+// in an acknowledge clock sees this one too (bus_line_ack_x).  A line that
+// never turns valid (a write landed in it) drops the wait and the beat is
+// read afresh, as before.
+reg         bus_tail_wait;
+reg   [1:0] bus_tail_lw;
+wire        bus_tail_ack   = bus_tail_wait && line_valid_sw;
+wire        bus_line_ack_x = bus_line_ack || bus_tail_ack;
+wire [31:0] bus_tail_data  = (bus_tail_lw == 2'd0) ? mem_line_data[127:96] :
+	                         (bus_tail_lw == 2'd1) ? mem_line_data[95:64]  :
+	                         (bus_tail_lw == 2'd2) ? mem_line_data[63:32]  :
+	                                                 mem_line_data[31:0];
+assign bus_ack   = bus_line_ack || bus_tail_ack || bus_miss_ack || bus_ack_adapter || bus_vram_wr_now;
 assign bus_rdata = bus_line_ack ? bus_line_rdata :
+	               bus_tail_ack ? bus_tail_data  :
 	               bus_miss_ack ? bus_miss_rdata : bus_rdata_adapter;
 
 wire        walker_req, walker_we;
@@ -732,7 +752,7 @@ wire [31:0] line_cpu_data = (b_addr[3:2] == 2'd0) ? mem_line_data[127:96] :
 // acknowledged without being written.  That was Open Transport's CAS/CAS2
 // lists going circular under receive traffic (verilator/tb_line_dma.sv).
 wire bus_ram_eligible = (svc == S_IDLE) && !walker_pend && !cpu_berr &&
-	                    !bus_miss_ack && !bus_line_ack && !bus_adapter_active &&
+	                    !bus_miss_ack && !bus_line_ack_x && !bus_adapter_active &&
 	                    !bus_ack_adapter && bus_req && !bus_write &&
 	                    (bus_size == 2'd2) && (bus_addr[1:0] == 2'b00) &&
 	                    (decode(bus_addr[31:2]) == 3'd0);
@@ -751,7 +771,7 @@ wire bus_first_miss = bus_ram_eligible && !bus_line_match && !bus_line_wait;
 // ROM fill beats outnumber VRAM beats several times, and each was a DDR3
 // round trip of its own.
 wire bus_rom_eligible = (svc == S_IDLE) && !walker_pend && !cpu_berr &&
-	                    !bus_miss_ack && !bus_line_ack && !bus_adapter_active &&
+	                    !bus_miss_ack && !bus_line_ack_x && !bus_adapter_active &&
 	                    !bus_ack_adapter && !wr_split_pend && bus_req && !bus_write &&
 	                    (bus_size == 2'd2) && (bus_addr[1:0] == 2'b00) &&
 	                    (decode(bus_addr[31:2]) == 3'd1);
@@ -779,7 +799,7 @@ wire [31:0] bus_line_data = (bus_addr[3:2] == 2'd0) ? mem_line_data[127:96] :
 // long word first, then on round the line.
 localparam LINE_BURST = 1;
 wire  [1:0] bus_next_lw    = bus_addr[3:2] + 2'd1;
-wire bus_burst_next = bus_line_more && bus_req && !bus_write && (bus_line_ack || bus_miss_ack) &&
+wire bus_burst_next = bus_line_more && bus_req && !bus_write && (bus_line_ack_x || bus_miss_ack) &&
 	                  (svc == S_IDLE) && !walker_pend && !cpu_berr && !bus_adapter_active &&
 	                  !bus_ack_adapter && !wr_split_pend && (bus_size == 2'd2) && (bus_addr[1:0] == 2'b00);
 wire bus_next_ram = bus_burst_next && (decode(bus_addr[31:2]) == 3'd0) &&
@@ -828,7 +848,7 @@ reg   [3:0] wr_split_be;
 reg  [31:0] wr_split_data;
 wire        bus_wr_span  = (bus_wr_end > 3'd4);
 wire bus_wr_direct = (DIRECT_WRITES != 0) && (svc == S_IDLE) && !walker_pend && !cpu_berr &&
-	                 !bus_miss_ack && !bus_line_ack && !bus_adapter_active && !wr_split_pend &&
+	                 !bus_miss_ack && !bus_line_ack_x && !bus_adapter_active && !wr_split_pend &&
 	                 !bus_ack_adapter && bus_req && bus_write &&
 	                 (!bus_wr_span || (decode(bus_addr[31:2] + 30'd1) == 3'd0)) &&
 	                 (decode(bus_addr[31:2]) == 3'd0) && mem_wq_room;
@@ -841,7 +861,7 @@ wire bus_wr_direct = (DIRECT_WRITES != 0) && (svc == S_IDLE) && !walker_pend && 
 // (docs/GRAPHICS_PROFILE_20260926.md).  The next VRAM beat is decoded two
 // clocks later at the earliest, after the write has landed.
 wire bus_vram_direct = (DIRECT_WRITES != 0) && (svc == S_IDLE) && !walker_pend && !cpu_berr &&
-	                   !bus_miss_ack && !bus_line_ack && !bus_adapter_active && !wr_split_pend &&
+	                   !bus_miss_ack && !bus_line_ack_x && !bus_adapter_active && !wr_split_pend &&
 	                   !bus_ack_adapter && bus_req && bus_write &&
 	                   (!bus_wr_span || (decode(bus_addr[31:2] + 30'd1) == 3'd2)) &&
 	                   (decode(bus_addr[31:2]) == 3'd2) && mem_vram_wq_room;
@@ -851,7 +871,7 @@ wire bus_vram_direct = (DIRECT_WRITES != 0) && (svc == S_IDLE) && !walker_pend &
 // right-aligned as wombat_bus32 would return them, two clocks sooner.
 // QuickDraw's reads of the frame buffer are uncached, one bus beat each.
 wire bus_vram_rd = (svc == S_IDLE) && !walker_pend && !cpu_berr &&
-	               !bus_miss_ack && !bus_line_ack && !bus_adapter_active && !wr_split_pend &&
+	               !bus_miss_ack && !bus_line_ack_x && !bus_adapter_active && !wr_split_pend &&
 	               !bus_ack_adapter && bus_req && !bus_write && !bus_wr_span &&
 	               (decode(bus_addr[31:2]) == 3'd2);
 
@@ -870,7 +890,24 @@ wire [31:0] bus_vram_fast_data = (mem_vram_fast_data << {bus_addr[1:0], 3'd0}) >
 assign bus_req_adapter = bus_req && !bus_line_match && !bus_line_wait && !bus_wr_direct && !bus_vram_direct && !bus_vram_rd &&
 	                     !bus_rom_match && !bus_rom_first && !wr_split_pend &&
 	                     !bus_first_miss && !svc_bus_direct && !bus_miss_ack &&
-	                     !bus_line_ack;
+	                     !bus_line_ack_x;
+
+wire bus_tail_arm = (LINE_BURST != 0) && bus_burst_next && bus_miss_ack &&
+	                (decode(bus_addr[31:2]) == 3'd0) && line_pending_sw &&
+	                (bus_ram[24:2] == mem_line_pending_tag);
+always @(posedge clk) begin
+	if (!nreset) begin
+		bus_tail_wait <= 0;
+		bus_tail_lw   <= 0;
+	end
+	else if (ce) begin
+		if (bus_tail_arm) begin
+			bus_tail_wait <= 1;
+			bus_tail_lw   <= bus_next_lw;
+		end
+		else if (line_valid_sw || !line_pending_sw) bus_tail_wait <= 0;
+	end
+end
 
 always @(posedge clk) begin
 	if (!nreset) begin
@@ -881,7 +918,7 @@ always @(posedge clk) begin
 	else if (ce) begin
 		bus_line_ack  <= 0;
 		bus_line_vram <= 0;
-		if (!bus_line_ack && (bus_line_match || bus_rom_match || bus_vram_fast)) begin
+		if (!bus_line_ack_x && (bus_line_match || bus_rom_match || bus_vram_fast)) begin
 			bus_line_ack   <= 1;
 			bus_line_vram  <= bus_vram_fast;
 			bus_line_rdata <= bus_vram_fast ? bus_vram_fast_data :
