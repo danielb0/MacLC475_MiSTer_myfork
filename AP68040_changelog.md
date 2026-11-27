@@ -544,3 +544,69 @@ LC 475's RAM timing; the estimate noted above is 10 (4-2-2-2).
   `MOVE.L D0,D1` at 0.98; BTIC (1) does nothing for a wrong guess.
 - **Verified:** tests/timing sets 1-4, run_cpu040 smoke/lc040/machine/mmu/
   profile, memsweep 360 of 360. Not yet on the board.
+
+## 22. Counters for the CPU's own stalls (observation only)
+
+- **Change:** `ap68040.sv` `dbg_perf` grows to 24 bits: conditional
+  branches leaving EX and those guessed wrong, other wrong guesses,
+  decoder redirects, refill clocks after a redirect, pacer holds, AG
+  register waits, a DC2 load waiting for an older store (`ap68040_backend`
+  `dbg_bp`, `ap68040_dmu` `dbg_perf[15]`). No timing change.
+- **Board (Norton CPU, 2026-11-27):** refill after redirects is 14-17% of
+  all clocks in Branches, Sort and Tree, about 6 clocks a redirect; Sort
+  and Tree guess 22% of their conditional branches wrong. Search loses
+  11.7% to AG waiting for an address register just loaded (no manual
+  figure). A load behind a store costs under 1% everywhere.
+
+## 23. Both paths of a conditional branch (the shadow)
+
+- **Documented:** MC68040UM 1.x, "both execution paths of the branch are
+  fetched and decoded to minimize refilling of the instruction pipeline";
+  2.1, shadow registers that "can begin processing future instructions for
+  conditional branches". Bcc takes 2 clocks taken and 3 not, DBcc 3 and 4,
+  whatever happened before.
+- **Before:** this core guesses one path and refills after a wrong guess:
+  the target's words reach the queue 4 clocks after EX redirects, and the
+  next instruction reaches EX 9 clocks after the branch.
+- **Change** (`ap68040_fetch.sv` parameter `SHADOW`, `cpu040.sv` sets it;
+  HLF only):
+  - D1 (`alt_req`, `alt_pc`) asks, as it pushes a Bcc with a condition or a
+    DBcc, for the path it did not choose; a request for a path already
+    held, on its way or waiting is dropped (a loop asks every turn).
+  - F0 fetches the request's half-line before the stream, except in the
+    clock after F1 sent F0 to a BTB target (that fetch goes first; in the
+    clock F1 does so, F0's sequential fetch is dropped anyway and a shadow
+    fetch there is free). The chunk passes F1-F3 marked, is predecoded on
+    the way, and F3 keeps it in one of four entries; a plain branch the BTB
+    takes in it ends its words, flagged, with its target. A miss, fault or
+    walk drops it: the shadow never starts a bus access.
+  - The back end marks a redirect for a wrong guess as it leaves EX
+    (`redir_br`, the ex_early redirect: no mode change, no exception). If
+    an entry (or the shadow chunk in F3 that clock) holds the redirect's
+    address, its words and predecode go into the queue in the redirect's
+    clock and F0 goes on after them (the next half-line, or the flagged
+    branch's target); the fetch after them is the lookahead, not a demand
+    fetch.
+  - Every back-end redirect empties the entries; so do CINV/CPUSH of the
+    instruction cache, snoops and I-ATC flushes and installs (a chunk on
+    its way then is not kept). The entries are a copy of what the cache
+    answered, as the 68040's prefetch of both paths is: self-modifying code
+    still needs CPUSHA (UM 4.5, 7.7).
+- **After** (clocks; the manual's figure last): two-turn loop 15.4 -> 12.9
+  (8); carry every other time 15.6 -> 13.1 (9); alternating BEQ 12.6 ->
+  11.6 (9); LFSR-driven BCC 11.7 -> 10.8 (8); DBRA's exit after n turns
+  about 2.2 less (n = 0: 11 -> 9.0, 5); `BNE.S` taken 4.5 -> 3.9 (2).
+  Over the 168 cases with a figure the excess over the manual fell from
+  298 clocks to 277; none newly under its figure. Slower: 64 different
+  taken `BNE.W` in a row 2.14 -> 2.42 (2), not taken with a `MOVEQ` 4.39
+  -> 4.69 (4): each one's other path takes an F0 slot. (Giving the stream
+  F0 whenever the queue is empty fixes those two and loses about a third of
+  the gains: 287.)
+- **Left:** the fetch has one cache lookup a clock, shared by both paths;
+  the 68040 fetches both at once. A wrong guess still costs the decoder,
+  AG, DC1 and DC2 after the words arrive (EX at about R+6, the manual's
+  R+1).
+- **Off:** `SHADOW = 0`.
+- **Verified:** tests/timing sets 1-4; run_cpu040 smoke, lc040, machine,
+  mmu, profile; memsweep 360 of 360. A planted fault (a shadow's words
+  loaded one place out) fails 48 of 48 memsweep runs. Not yet on the board.

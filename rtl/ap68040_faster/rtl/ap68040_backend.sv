@@ -48,6 +48,8 @@ module ap68040_backend
 	// redirect of the front end (registered)
 	output logic        redir_v,
 	output logic [31:0] redir_pc,
+	output logic        redir_br,       // ... a wrong branch or jump guess leaving EX
+	                                    // (ex_early: no mode change, no exception)
 	output logic        flush,          // kill everything younger than WB
 	output logic        fe_flush,       // the front end's flush (D1, D2)
 	output logic        ras_rv,         // D1's return stack to restore with it
@@ -1880,6 +1882,7 @@ always_ff @(posedge clk) begin
 	cm_wr  = 1'b0;
 	cm_rst = 1'b0;
 	redir_v <= 1'b0;
+	redir_br <= 1'b0;
 	ras_rv  <= 1'b0;
 	exc_go  <= 1'b0;
 	flush   <= 1'b0;
@@ -2150,6 +2153,7 @@ dc1_a1  <= ag_s.agop ? ag1_val :
 			if (ex_early) begin
 				fe_flush    <= 1'b1;
 				redir_v     <= 1'b1;
+				redir_br    <= 1'b1;
 				redir_pc    <= ex_next;
 				ras_rv      <= ex_u.ras.v || cr_v;
 				if (!ex_u.ras.v) {ras_rtp, ras_rn} <= cr_s;

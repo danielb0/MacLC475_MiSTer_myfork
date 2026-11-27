@@ -73,6 +73,16 @@ module ap68040_fetch
 	// on the instruction bus); 0: a long word, two.  Not with BTIC, whose
 	// target words are a long word: BTIC keeps the long word.
 	parameter bit HLF  = 1,
+	// Both paths of a conditional branch (MC68040UM 1.x: "both execution
+	// paths of the branch are fetched and decoded to minimize refilling of
+	// the instruction pipeline"; 2.1: shadow registers).  D1 asks for the
+	// path it did not choose (alt_req); F0 fetches its half-line in a slot
+	// the stream does not need, F1-F3 carry it marked as a shadow chunk
+	// (predecoded on the way), and F3 keeps it in one of SE entries.  A
+	// back-end redirect for a wrong guess (redir_br) to an entry's address
+	// loads its words into the queue in the redirect's clock, and F0 goes
+	// on at the next half-line.  HLF only.
+	parameter bit SHADOW = 0,
 	parameter logic [2:0] S1_CLASSES = 3'b111,  // second-slot classes marked: {load, An, Dn}
 	parameter logic [3:0] S1_LDMASK  = 4'b1111  // ... of the loads: {TST (Ay), ALU (Ay),Dx, MOVEA.L (Ay),Ax, MOVE (Ay),Dx}
 )(
@@ -81,6 +91,9 @@ module ap68040_fetch
 
 	input  logic        redir_v,      // highest priority
 	input  logic [31:0] redir_pc,
+	input  logic        redir_br,     // ... for a wrong branch or jump guess (SHADOW)
+	input  logic        alt_req,      // D1: a conditional branch's other path (SHADOW)
+	input  logic [31:0] alt_pc,
 	input  logic        d_redir_v,    // decoder (predicted branch)
 	input  logic [31:0] d_redir_pc,
 	input  logic        stop,         // do not start new fetches
@@ -200,7 +213,19 @@ logic [$bits(pd_t)-1:0] qpr_q [FW];     // each bank at the next head's row
 logic [FW-1:0]          qpr_we;
 logic [3-FWL:0]         qpr_wa [FW];
 logic [$bits(pd_t)-1:0] qpr_wd [FW];
-logic                   f3_go;          // F3's words join the queue this cycle
+logic                   f3_go;          // F3 moves on this cycle
+logic                   f3_q;           // ... and its words join the queue
+// SHADOW: a redirect loads a shadow entry into the queue (sh_use, sh_e)
+logic                   sh_use;
+logic  [1:0]            sh_e;
+// (the words a matching redirect loads: an entry's, or the shadow chunk
+// in F3 this very clock)
+logic  [2:0]            ld_n;
+logic [15:0]            ld_w [4];
+pd_t                    ld_p [4];
+logic  [3:0]            ld_s, ld_b;
+logic [30:0]            ld_t, ld_pc;
+logic  [3:0]            qh_n;
 logic  [3:0]   qh;             // the ring's head
 pd_t           qp0;
 // synthesis translate_off
@@ -221,7 +246,7 @@ assign q_odd = odd;
 assign pd0   = qp0;
 // the head's predecode as it will be next cycle (qp0's load): D1's
 // attribute ROM reads it a cycle ahead
-wire [3:0] qh_n = qwrap(5'(qh) + {2'b00, consume});        // the head next cycle
+assign qh_n = qwrap(5'(qh) + {2'b00, consume});            // the head next cycle
 pd_t       qpr_rd;
 assign qpr_rd = pd_t'(qpr_q[qh_n[FWL-1:0]]);
 always_comb begin
@@ -230,10 +255,21 @@ always_comb begin
 	for (int j = 0; j < FW; j++) begin
 		logic [3:0] w;
 		w = qwrap(5'(qh) + cnt + 5'(j));
-		if (3'(j) < f3_n && f3_go) begin
+		if (3'(j) < f3_n && f3_q && !sh_use) begin
 			qpr_we[w[FWL-1:0]] = 1'b1;
 			qpr_wa[w[FWL-1:0]] = w[3:FWL];
 			qpr_wd[w[FWL-1:0]] = f3_p[j];
+		end
+	end
+	// (the shadow's words at the new head: the queue is emptied by the
+	// redirect, so they take the first slots, one per bank)
+	for (int j = 0; j < FW; j++) begin
+		logic [3:0] w;
+		w = qwrap(5'(qh_n) + 5'(j));
+		if (sh_use && 3'(j) < ld_n) begin
+			qpr_we[w[FWL-1:0]] = 1'b1;
+			qpr_wa[w[FWL-1:0]] = w[3:FWL];
+			qpr_wd[w[FWL-1:0]] = ld_p[j];
 		end
 	end
 end
@@ -245,7 +281,9 @@ generate
 		assign qpr_q[gq] = m[qh_n[3:FWL]];
 	end
 endgenerate
-assign pd0_n = (cnt == {2'b00, consume}) ? f3_p[0] : qpr_rd;
+// (SHADOW: a redirect that loads a shadow entry: its first word's)
+assign pd0_n = sh_use ? ld_p[0] :
+               (cnt == {2'b00, consume} && !f3_alt) ? f3_p[0] : qpr_rd;
 function automatic logic [3:0] qwrap(input logic [4:0] x);   // x mod QN, x < 2*QN
 	qwrap = (x >= 5'(QN)) ? 4'(x - 5'(QN)) : x[3:0];
 endfunction
@@ -289,6 +327,24 @@ function automatic logic [1:0] s1_ldk(input s1_t s);
 	s1_ldk = !s.d_v && s.op == S1_MOV ? 2'd3 : s.op != S1_MOV ? 2'd2 : s.d_reg[3] ? 2'd1 : 2'd0;
 endfunction
 logic [30:0]  f3_t;
+// SHADOW: the shadow entries, the requests waiting for F0, and the shadow
+// chunk's marks in F1-F3
+localparam int SE = 4;
+logic [SE-1:0] sh_v;
+logic [30:0]   sh_pc [SE];
+logic  [2:0]   sh_n  [SE];
+logic [15:0]   sh_w  [SE][FW];
+pd_t           sh_p  [SE][FW];
+logic [FW-1:0] sh_s  [SE];
+logic [FW-1:0] sh_b  [SE];     // the word that ends a branch the BTB takes (plain branches)
+logic [30:0]   sh_t  [SE];     // ... its target
+logic  [1:0]   sh_rr;          // the next entry to fill
+logic  [1:0]   sh_blk;         // clocks a capture is refused after an invalidation
+logic  [1:0]   ap_v;           // requests (a FIFO of two)
+logic [30:0]   ap_pc [2];
+logic          f1_alt, f2_alt, f3_alt;
+logic          btk_r;          // F1 sent F0 to a BTB target last clock
+logic  [1:0]   f1_ai, f2_ai, f3_ai;
 genvar gp;
 generate
 	// (a table per pair of words: it has two reads)
@@ -578,7 +634,39 @@ logic [31:0] inv_pa;
 
 wire        redir_any = redir_v || d_redir_v;
 wire [31:0] redir_npc = redir_v ? redir_pc : d_redir_pc;
-assign      fa = redir_any ? {redir_npc[31:1], 1'b0} : fpc;
+// SHADOW: a back-end redirect for a wrong guess to a shadow entry's address
+// (the entries hold words as the cache answered them in this mode: every
+// other back-end redirect, and anything that can change what the cache or
+// the translation answers, empties them)
+logic [SE-1:0] sh_m;
+always_comb begin
+	sh_e = 2'd0;
+	for (int e = 0; e < SE; e++) begin
+		sh_m[e] = sh_v[e] && sh_pc[e] == redir_pc[31:1];
+		if (sh_m[e]) sh_e = 2'(e);
+	end
+end
+// (the shadow chunk in F3 matches as well: it would be an entry next clock)
+wire        f3m    = f3_alt && f3_n != 3'd0 && sh_blk == 2'd0 && sh_pc[f3_ai] == redir_pc[31:1];
+wire        sh_hit = SHADOW && redir_v && redir_br && ((sh_m != '0) || f3m);
+always_comb begin
+	ld_n  = f3m ? f3_n : sh_n[sh_e];
+	ld_s  = f3m ? f3_s : sh_s[sh_e];
+	ld_b  = f3m ? f3_b : sh_b[sh_e];
+	ld_t  = f3m ? f3_t : sh_t[sh_e];
+	ld_pc = sh_pc[f3m ? f3_ai : sh_e];
+	for (int i = 0; i < FW; i++) begin
+		ld_w[i] = f3m ? f3_w[i] : sh_w[sh_e][i];
+		ld_p[i] = f3m ? f3_p[i] : sh_p[sh_e][i];
+	end
+end
+// (the half-line after the entry's: its words ran to its half-line's end)
+wire [31:0] sh_nx  = (ld_b != '0) ? {ld_t, 1'b0} :
+                     {ld_pc[30:2], 3'b000} + 32'd8;
+// (or the target of a branch the BTB took inside it, where its words end)
+logic       alt_go;            // F0 fetches a shadow chunk (below)
+assign      fa = redir_any ? (sh_use ? sh_nx : {redir_npc[31:1], 1'b0}) :
+                 alt_go    ? {ap_pc[0], 1'b0} : fpc;
 
 //--------------------------------------------------------------------------
 // F1 evaluation
@@ -647,7 +735,9 @@ wire [FWL-1:0] f1_o   = f1_pc[FWL:1];
 wire     [2:0] f1_nsq = 3'(FW) - 3'(f1_o);
 wire     [2:0] f1_ntk = 3'(f1_bslot) - 3'(f1_o) + 3'd1;
 wire f1_go      = f1_v && !redir_any;
-wire f1_deliver = f1_go && x_hit;
+wire f1_deliver = f1_go && x_hit && !f1_alt;
+// a shadow chunk that hits goes on to F2; anything else drops it
+wire f1_adlv    = f1_go && x_hit && f1_alt;
 // the hit entry has words, for this mode
 wire [63:0] tw_q   = btb_qslot ? tw_q1 : tw_q0;
 wire        tw_hit = BTIC && !tw_cf && (btb_qslot ? twq1 : twq0) &&
@@ -663,14 +753,18 @@ wire tw_fill = BTIC && pf_v && f1_deliver && f1_pc[31:1] == pf_t && !btb_hit && 
 wire [5:0] inflight0 = (f1_v ? 6'(FW) : 6'd0) + {3'd0, f2_n} + {3'd0, f3_n};
 wire [5:0] inflight  = inflight0 + (tj_v ? 6'd2 : 6'd0);
 // the target FIFO cannot overflow: count the flagged words on their way
-wire       bt_room  = ({1'b0, tq_n} + {3'd0, f1_v && f1_bt} + {3'd0, |f2_b} + {3'd0, |f3_b}) < 4'd4;
+// (a shadow chunk's flag goes to its entry, not the list)
+wire       bt_room  = ({1'b0, tq_n} + {3'd0, f1_v && f1_bt && !f1_alt} + {3'd0, |f2_b && !f2_alt} +
+                       {3'd0, |f3_b && !f3_alt}) < 4'd4;
 // (HL: F3 waits when the queue cannot take its words, so F0 needs room
 // only for the words ahead of its own chunk -- which then is the one chunk
 // that can wait, with nothing behind it)
 wire       room     = {1'b0, cnt} + inflight <= (HL ? 6'(QN) : 6'(QN - 2));
 // F3's words join the queue (HL: when they fit)
 wire [4:0] keep_w   = cnt - {2'b00, consume};
-assign     f3_go    = !HL || ({1'b0, keep_w} + {3'd0, f3_n} <= 6'(QN));
+assign     f3_go    = !HL || f3_alt || ({1'b0, keep_w} + {3'd0, f3_n} <= 6'(QN));
+// (a shadow chunk in F3 goes to its entry, never into the queue)
+assign     f3_q     = f3_go && !f3_alt;
 // target words wait for room as a fetch would (F0 waits behind them)
 wire       tj_go    = tj_v && f3_go && ({1'b0, cnt} + inflight0 <= 6'(QN - 2));
 // a snooped invalidation goes first (the snooper has priority, 4.5)
@@ -678,12 +772,23 @@ wire       tj_go    = tj_v && f3_go && ({1'b0, cnt} + inflight0 <= 6'(QN - 2));
 // could not take a BTB hit, ran on past the branch and was redirected by the
 // decoder -- with half-line fetches a short loop got far enough ahead to
 // meet that every fourth turn in the queue)
-wire       f0_go    = (st == S_RUN) && !odd && !stop && !redir_any &&
+wire       f0_go_s  = (st == S_RUN) && !odd && !stop && !redir_any &&
                       !iatc_flush_page && !inv_busy && !sn_inv && room && (bt_room || !HL);
+// SHADOW: a request takes F0 before the stream (both paths are fetched;
+// a fetch brings four words, D1 takes one instruction a clock) -- except in
+// the clock after F1 sent F0 to a BTB target, whose fetch then goes first
+// (the clock F1 does so, F0's sequential fetch is dropped anyway: a shadow
+// fetch there costs the stream nothing).  It needs the same room, as its
+// chunk passes F2 and F3 (it does not join the queue).
+assign     alt_go   = SHADOW && HL && ap_v[0] && (st == S_RUN) && !stop && !redir_any &&
+                      !iatc_flush_page && !inv_busy && !sn_inv && room &&
+                      !(btk_r && f0_go_s);
+wire       f0_go    = f0_go_s && !alt_go;
 // the redirect's clock as its target's F0 (the queue and the target list
 // are emptied by the redirect itself: there is room)
 wire       rf0      = redir_any && (st == S_RUN) && !redir_npc[0] && !stop &&
                       !iatc_flush_page && !inv_busy && !sn_inv;
+assign     sh_use   = sh_hit && rf0;
 
 assign c_raddr = inv_busy ? inv_i[CSB-1:0] : fa[CSH:4];
 
@@ -767,6 +872,10 @@ always_ff @(posedge clk) begin
 		for (int i = 0; i < QN; i++) qw[i] <= '0;
 		qh  <= '0;
 		qp0 <= '0;
+		sh_v <= '0; sh_rr <= '0; sh_blk <= '0; ap_v <= '0;
+		f1_alt <= 1'b0; f2_alt <= 1'b0; f3_alt <= 1'b0; btk_r <= 1'b0;
+		f1_ai <= '0; f2_ai <= '0; f3_ai <= '0;
+		for (int i = 0; i < 2; i++) ap_pc[i] <= '0;
 	end
 	else begin
 		logic [4:0] keep;
@@ -796,7 +905,7 @@ always_ff @(posedge clk) begin
 				qb[i] <= qb[src[4:0]];
 				qs[i] <= qs[src[4:0]];
 			end
-			else if (k < {2'b00, f3_n} && f3_go) begin
+			else if (k < {2'b00, f3_n} && f3_q) begin
 				// synthesis translate_off
 				qps[i] <= f3_p[k[FWL-1:0]];
 				// synthesis translate_on
@@ -808,7 +917,7 @@ always_ff @(posedge clk) begin
 				qs[i] <= f3_s[k[FWL-1:0]];
 			end
 		end
-		cnt   <= keep + (f3_go ? {2'b00, f3_n} : 5'd0);
+		cnt   <= keep + (f3_q ? {2'b00, f3_n} : 5'd0);
 		// the predecode ring: appended at head + count (wherever D1's
 		// consume puts the head), the head moved by consume
 		begin
@@ -836,7 +945,7 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				for (int i = 0; i < 3; i++) tqn[i] = tqn[i + 1];
 				n = n - 3'd1;
 			end
-			if (f3_n != 3'd0 && f3_go && f3_b != '0 && n != 3'd4) begin
+			if (f3_n != 3'd0 && f3_q && f3_b != '0 && n != 3'd4) begin
 				tqn[n[1:0]] = f3_t;
 				n = n + 3'd1;
 			end
@@ -845,6 +954,8 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 		end
 		if (f3_go) begin
 			f3_n  <= f2_n;
+			f3_alt <= f2_alt;
+			f3_ai  <= f2_ai;
 			f3_f  <= f2_f; f3_d <= f2_d; f3_a <= f2_a;
 			f3_b  <= f2_b; f3_t <= f2_t;
 			for (int i = 0; i < FW; i++) f3_w[i] <= f2_w[i];
@@ -860,6 +971,7 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 		// synthesis translate_on
 		f2_n  <= '0;
 		f2_b  <= '0;
+		f2_alt <= 1'b0;
 		// the target words of the BTB-taken branch F1 delivered (when
 		// there is room for them)
 		if (tj_go) begin
@@ -882,6 +994,8 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 		//------------------------------------------------------------------
 		f1_v  <= 1'b0;
 		f1_btok <= 1'b0;
+		f1_alt <= 1'b0;
+		btk_r <= 1'b0;
 		if (f0_go) begin
 			f1_v   <= 1'b1;
 			f1_btok <= bt_room;
@@ -896,12 +1010,68 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 			fnew   <= 1'b0;
 			fpc    <= HL ? {fpc[31:3], 3'b000} + 32'd8 : {fpc[31:2], 2'b00} + 32'd4;
 		end
+		// SHADOW: a request's half-line into an entry (the stream's fpc and
+		// demand marks untouched)
+		if (alt_go) begin
+			f1_v    <= 1'b1;
+			f1_alt  <= 1'b1;
+			f1_ai   <= sh_rr;
+			f1_btok <= 1'b1;
+			f1_pc   <= fa;
+			f1_s    <= smode;
+			f1_tt0  <= ttr_hit(itt0, fa, smode);
+			f1_tt1  <= ttr_hit(itt1, fa, smode);
+			f1_tce  <= tc_e;
+			f1_dem  <= 1'b0;
+			f1_hit  <= atc_hit;
+			f1_e    <= atc_e;
+			sh_v[sh_rr]  <= 1'b0;
+			sh_pc[sh_rr] <= ap_pc[0];
+			sh_rr   <= sh_rr + 2'd1;
+		end
+		// the requests: D1 pushes, F0 pops
+		begin
+			logic [1:0]  v;
+			logic [30:0] a0, a1;
+			logic        dup;
+			logic [SE-1:0] held;
+			// (a request for a path already held, on its way or waiting is
+			// dropped: a loop asks for the same one every turn)
+			held = sh_v;
+			if (f1_v && f1_alt)          held[f1_ai] = 1'b1;
+			if (f2_alt && f2_n != 3'd0)  held[f2_ai] = 1'b1;
+			if (f3_alt && f3_n != 3'd0)  held[f3_ai] = 1'b1;
+			dup = (ap_v[0] && ap_pc[0] == alt_pc[31:1]) || (ap_v[1] && ap_pc[1] == alt_pc[31:1]);
+			for (int e = 0; e < SE; e++) if (held[e] && sh_pc[e] == alt_pc[31:1]) dup = 1'b1;
+			v = ap_v; a0 = ap_pc[0]; a1 = ap_pc[1];
+			if (alt_go) begin v = {1'b0, v[1]}; a0 = a1; end
+			if (SHADOW && alt_req && !alt_pc[0] && !dup) begin
+				if (!v[0])      begin v[0] = 1'b1; a0 = alt_pc[31:1]; end
+				else if (!v[1]) begin v[1] = 1'b1; a1 = alt_pc[31:1]; end
+			end
+			ap_v <= v; ap_pc[0] <= a0; ap_pc[1] <= a1;
+		end
 
 		//------------------------------------------------------------------
 		// F1: a hit goes to F2; anything else to the miss engine, and F0
 		// rolls back to the missed address
 		//------------------------------------------------------------------
-		if (f1_deliver) begin
+		if (f1_adlv) begin
+			f2_n    <= f1_nsq;
+			for (int i = 0; i < FW; i++) f2_w[i] <= x_w[FWL'(f1_o + FWL'(i))];
+			f2_f <= 1'b0; f2_d <= 1'b0; f2_a <= 1'b0;
+			f2_alt <= 1'b1;
+			f2_ai  <= f1_ai;
+			// a plain branch the BTB takes in it: its words end there, flagged,
+			// and the stream would go on at its target (calls and returns,
+			// which move the fetch's return stack, are left to D1)
+			if (f1_bt && f1_bkind == 2'd0) begin
+				f2_n <= f1_ntk;
+				f2_b <= FW'(1) << (f1_ntk - 3'd1);
+				f2_t <= f1_btgt;
+			end
+		end
+		else if (f1_deliver) begin
 			f2_n    <= f1_nsq;
 			for (int i = 0; i < FW; i++) f2_w[i] <= x_w[FWL'(f1_o + FWL'(i))];
 			f2_f <= 1'b0; f2_d <= 1'b0; f2_a <= 1'b0;
@@ -923,8 +1093,10 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				f2_b <= FW'(1) << (f1_ntk - 3'd1);
 				if (one && tu) f2_w[1] <= t[0] ? tw_lw[15:0] : tw_lw[31:16];
 				f2_t <= t;
-				f1_v <= 1'b0;
-				f1_btok <= 1'b0;
+				btk_r <= 1'b1;
+				// (F0's sequential chunk of this clock is dropped; a shadow
+				// chunk is not the stream's and goes on)
+				if (!alt_go) begin f1_v <= 1'b0; f1_btok <= 1'b0; end
 				fpc  <= tu ? {t[30:1] + 30'd1, 2'b00} : {t, 1'b0};
 				fnew <= 1'b0;
 				tj_v  <= tu && !(one && t[0]);
@@ -949,8 +1121,8 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				end
 			end
 		end
-		else if (f1_go) begin
-			f1_v   <= 1'b0;
+		else if (f1_go && !f1_alt) begin
+			if (!alt_go) f1_v <= 1'b0;
 			fpc    <= f1_pc;
 			fnew   <= f1_dem;
 			m_la   <= f1_pc;
@@ -1184,11 +1356,29 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				f1_tt0  <= ttr_hit(itt0, fa, smode);
 				f1_tt1  <= ttr_hit(itt1, fa, smode);
 				f1_tce  <= tc_e;
-				f1_dem  <= 1'b1;
+				// (after a shadow's words this fetch is the lookahead: a
+				// fault on it is speculative, as any fetch after the first)
+				f1_dem  <= !sh_use;
 				f1_hit  <= atc_hit;
 				f1_e    <= atc_e;
 				fnew    <= 1'b0;
 				fpc     <= HL ? {fa[31:3], 3'b000} + 32'd8 : {fa[31:2], 2'b00} + 32'd4;
+			end
+			if (sh_use) begin
+				// the shadow entry's words are the queue (its predecode: the
+				// ring's writes, and the head)
+				cnt <= 5'(ld_n);
+				tq[0] <= ld_t;
+				tq_n  <= (ld_b != '0) ? 3'd1 : 3'd0;
+				for (int i = 0; i < FW; i++) begin
+					qw[i] <= ld_w[i];
+					qf[i] <= 1'b0; qd[i] <= 1'b0; qa[i] <= 1'b0;
+					qb[i] <= ld_b[i];
+					qs[i] <= ld_s[i];
+					// synthesis translate_off
+					qps[i] <= ld_p[i];
+					// synthesis translate_on
+				end
 			end
 			if (st == S_FILL || st == S_CI) begin
 				if (out_next) stale <= 1'b1;
@@ -1196,6 +1386,30 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 			end
 			if (st == S_HALT) st <= S_RUN;
 		end
+
+		//------------------------------------------------------------------
+		// SHADOW: F3's shadow chunk into its entry; the entries emptied by
+		// every back-end redirect (after a matching one loaded the queue)
+		// and by anything that can change what the cache or the translation
+		// answers -- a chunk on its way then is not kept either (sh_blk)
+		//------------------------------------------------------------------
+		if (sh_blk != 2'd0) sh_blk <= sh_blk - 2'd1;
+		if (SHADOW && f3_alt && f3_n != 3'd0 && sh_blk == 2'd0) begin
+			sh_v[f3_ai] <= 1'b1;
+			sh_n[f3_ai] <= f3_n;
+			for (int j = 0; j < FW; j++) begin
+				sh_w[f3_ai][j] <= f3_w[j];
+				sh_p[f3_ai][j] <= f3_p[j];
+			end
+			sh_s[f3_ai] <= f3_s;
+			sh_b[f3_ai] <= f3_b;
+			sh_t[f3_ai] <= f3_t;
+		end
+		if (redir_v || ic_inv || sn_inv || inv_busy || iatc_flush_all || iatc_flush_page || iatc_wr) begin
+			sh_v <= '0;
+			if (!redir_v) sh_blk <= 2'd3;
+		end
+		if (redir_v) ap_v <= '0;
 
 		//------------------------------------------------------------------
 		// CINV/CPUSH of the instruction cache

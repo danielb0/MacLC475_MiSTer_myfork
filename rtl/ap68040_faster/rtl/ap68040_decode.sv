@@ -91,7 +91,12 @@ module ap68040_decode
 	output logic [30:0] ras_o,        // the return stack's top, for the fetch's
 	output logic  [2:0] ras_tp_o,
 	output logic  [3:0] ras_n_o,
-	output logic        ras_xp          // the top was popped a clock after a redirect
+	output logic        ras_xp,         // the top was popped a clock after a redirect
+	// a conditional branch (Bcc with a condition, DBcc) enters the FIFO:
+	// the path D1 did not choose, for the fetch's shadow (MC68040UM 1.x:
+	// both paths of a branch are fetched and decoded)
+	output logic        alt_req,
+	output logic [31:0] alt_pc
 );
 
 `include "gen/ap68040_dec_pla.svh"
@@ -805,6 +810,9 @@ wire room  = (rq_n != 2'd2) || rq_pop_e;
 wire stall = flush || hold_redir || d_redir_v || !room || bt_hold;
 wire fire  = (go || go_part) && !stall;
 wire push  = fire && go;
+assign alt_req = push && nrec_q.exc == 8'd0 && pd0.legal &&
+                 ((nrec.rt == UA_BCC && opw[11:8] > 4'h1) || nrec.rt == UA_DBCC);
+assign alt_pc  = nrec.pred ? lastpc + 32'd2 : ntarget;
 assign rq_push = push;
 assign rq_in   = nrec_q;
 wire pop   = rq_pop && (rq_n != 2'd0);

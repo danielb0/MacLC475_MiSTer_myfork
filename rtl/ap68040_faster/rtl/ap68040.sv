@@ -27,6 +27,7 @@ module ap68040
 	parameter bit         DUAL         = 1,      // dual issue: the second slot (ap68040_pkg s1_t)
 	parameter bit         BTIC         = 1,      // the fetch BTB's target words
 	parameter bit         HLF          = 0,      // a fetch is a half-line, four words (not with BTIC)
+	parameter bit         SHADOW       = 0,      // both paths of a conditional branch (HLF; ap68040_fetch)
 	parameter bit         DM_EARLY_TA  = 1,      // the DMU takes TA in its own clock (biu done_e)
 	parameter bit         DM_FAST_BUS  = 1,      // the DMU starts a store that misses the cache a clock sooner
 	// DUAL: the second slot's classes {load, An, Dn}.  Loads are off: on the
@@ -272,6 +273,9 @@ assign d_oe = sn_d_oe || b_d_oe;
 //--------------------------------------------------------------------------
 logic        redir_v, flush, fe_flush;
 logic [31:0] redir_pc;
+logic        redir_br;
+logic        alt_req;
+logic [31:0] alt_pc;
 logic        exc_go, exc_pend;
 logic  [3:0] exc_kind;
 logic  [4:0] exc_ssp;
@@ -320,7 +324,7 @@ ap68040_backend #(.HAS_FPU(HAS_FPU), .FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_
                   .SKID(SKID), .DIV_STEPS(DIV_STEPS), .DUAL(DUAL), .PACE(PACE)) be (
 	.clk(clk), .nreset(nreset),
 	.in_v(uo_v), .in_u(uo_u), .in_s(uo_s), .in_rdy(uo_rdy),
-	.redir_v(redir_v), .redir_pc(redir_pc), .flush(flush), .fe_flush(fe_flush),
+	.redir_v(redir_v), .redir_pc(redir_pc), .redir_br(redir_br), .flush(flush), .fe_flush(fe_flush),
 	.ras_rv(ras_rv), .ras_rtp(ras_rtp), .ras_rn(ras_rn),
 	.exc_go(exc_go), .exc_pend(exc_pend), .exc_kind(exc_kind), .exc_ssp(exc_ssp),
 	.ucond_v(ucond_v), .ucond(ucond),
@@ -427,9 +431,9 @@ logic  [1:0] rq_n;
 dinst_t      rq0, rq1;
 logic        rq_pop, rq_pop_e;
 
-ap68040_fetch #(.BTIC(BTIC), .HLF(HLF), .S1_CLASSES(S1_CLASSES), .S1_LDMASK(S1_LDMASK)) fetch (
+ap68040_fetch #(.BTIC(BTIC), .HLF(HLF), .SHADOW(SHADOW), .S1_CLASSES(S1_CLASSES), .S1_LDMASK(S1_LDMASK)) fetch (
 	.clk(clk), .nreset(nreset),
-	.redir_v(redir_v), .redir_pc(redir_pc),
+	.redir_v(redir_v), .redir_pc(redir_pc), .redir_br(redir_br), .alt_req(alt_req), .alt_pc(alt_pc),
 	.d_redir_v(d_redir_v), .d_redir_pc(d_redir_pc),
 	// no fetches while stopped or halted, nor while RSTO is asserted
 	.stop(be_fstop || rsto_busy), .smode(sr[13]),
@@ -470,7 +474,8 @@ ap68040_decode #(.HAS_FPU(HAS_FPU), .LOOP_PRED(LOOP_PRED), .DUAL(DUAL), .S1_LDTK
 	.lp_we(lp_we), .lp_wa(lp_wa), .lp_tk(lp_tk), .lp_mp(lp_mp),
 	.btb_we(btb_we), .btb_wi(btb_wi), .btb_wv(btb_wv), .btb_wtag(btb_wtag),
 	.btb_wslot(btb_wslot), .btb_wkind(btb_wkind), .btb_wtgt(btb_wtgt),
-	.ras_o(d_ras), .ras_tp_o(d_ras_tp), .ras_n_o(d_ras_n), .ras_xp(d_ras_xp)
+	.ras_o(d_ras), .ras_tp_o(d_ras_tp), .ras_n_o(d_ras_n), .ras_xp(d_ras_xp),
+	.alt_req(alt_req), .alt_pc(alt_pc)
 );
 
 ap68040_useq #(.HAS_FPU(HAS_FPU), .DUAL(DUAL)) useq (

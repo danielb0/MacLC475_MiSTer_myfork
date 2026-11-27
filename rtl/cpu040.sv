@@ -93,7 +93,7 @@ wire  [2:0] cpu_bus_fc;
 ap68040 #(
 	.HAS_FPU(AP040_HAS_FPU), .FPU_REVISION(8'h41),
 	.FPU_PIPE(0), .LOOP_PRED(0), .EARLY_RES(0), .DC1_ATC(0), .SKID(0), .DIV_STEPS(4),
-	.DUAL(0), .BTIC(0), .HLF(1),
+	.DUAL(0), .BTIC(0), .HLF(1), .SHADOW(1),
 	// only RAM ($0-$3FFFFFFF) and the ROM window ($4xxxxxxx) are cacheable:
 	// everything else is a device, never read speculatively
 	// (the DMU has no posted VRAM stores: the Q800 donor's posting hung the
