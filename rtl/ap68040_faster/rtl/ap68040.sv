@@ -304,12 +304,17 @@ logic [15:0] dm_fssw, dm_st_fssw;
 logic  [1:0] uq_n;
 uop_t        uq0;
 s1_t         uq0s;
+logic        uo_v;
+logic        rq_push;
+dinst_t      rq_in;
+uop_t        uo_u;
+s1_t         uo_s;
 logic        uo_rdy;
 
 ap68040_backend #(.HAS_FPU(HAS_FPU), .FPU_REVISION(FPU_REVISION), .FPU_PIPE(FPU_PIPE), .EARLY_RES(EARLY_RES),
                   .SKID(SKID), .DIV_STEPS(DIV_STEPS), .DUAL(DUAL), .PACE(PACE)) be (
 	.clk(clk), .nreset(nreset),
-	.in_v(uq_n != 2'd0), .in_u(uq0), .in_s(uq0s), .in_rdy(uo_rdy),
+	.in_v(uo_v), .in_u(uo_u), .in_s(uo_s), .in_rdy(uo_rdy),
 	.redir_v(redir_v), .redir_pc(redir_pc), .flush(flush), .fe_flush(fe_flush),
 	.ras_rv(ras_rv), .ras_rtp(ras_rtp), .ras_rn(ras_rn),
 	.exc_go(exc_go), .exc_pend(exc_pend), .exc_kind(exc_kind), .exc_ssp(exc_ssp),
@@ -454,7 +459,7 @@ ap68040_decode #(.HAS_FPU(HAS_FPU), .LOOP_PRED(LOOP_PRED), .DUAL(DUAL), .S1_LDTK
 	.pd0(pd0), .pd0_n(pd0_n), .qcnt(qcnt), .qpc(qpc), .q_odd(q_odd),
 	.smode(sr[13]),
 	.consume(consume), .consume_t(consume_t), .d_redir_v(d_redir_v), .d_redir_pc(d_redir_pc),
-	.rq_n(rq_n), .rq0(rq0), .rq1(rq1), .rq_pop(rq_pop), .rq_pop_e(rq_pop_e),
+	.rq_n(rq_n), .rq0(rq0), .rq1(rq1), .rq_push(rq_push), .rq_in(rq_in), .rq_pop(rq_pop), .rq_pop_e(rq_pop_e),
 	.bht_we(bht_we), .bht_wa(bht_wa), .bht_dis(bht_dis),
 	.lp_we(lp_we), .lp_wa(lp_wa), .lp_tk(lp_tk), .lp_mp(lp_mp),
 	.btb_we(btb_we), .btb_wi(btb_wi), .btb_wv(btb_wv), .btb_wtag(btb_wtag),
@@ -464,10 +469,11 @@ ap68040_decode #(.HAS_FPU(HAS_FPU), .LOOP_PRED(LOOP_PRED), .DUAL(DUAL), .S1_LDTK
 
 ap68040_useq #(.HAS_FPU(HAS_FPU), .DUAL(DUAL)) useq (
 	.clk(clk), .nreset(nreset), .flush(fe_flush),
-	.rq_n(rq_n), .rq0(rq0), .rq1(rq1), .rq_pop(rq_pop), .rq_pop_e(rq_pop_e),
+	.rq_n(rq_n), .rq0(rq0), .rq1(rq1), .d_push(rq_push), .d_rec(rq_in), .rq_pop(rq_pop), .rq_pop_e(rq_pop_e),
 	.smode(sr[13]), .master(sr[12]), .trace(sr[15] || sr[14]),
 	.exc_go(exc_go), .exc_pend(exc_pend), .exc_kind(exc_kind), .exc_ssp(exc_ssp),
-	.uq_n(uq_n), .uq0(uq0), .uq0s(uq0s), .uq_pop(uo_rdy && uq_n != 2'd0), .dbg_pu(dbg_pu)
+	.uq_n(uq_n), .uq0(uq0), .uq0s(uq0s), .uq_pop(uo_rdy && uq_n != 2'd0),
+	.uo_v(uo_v), .uo_u(uo_u), .uo_s(uo_s), .uq_rdy(uo_rdy), .dbg_pu(dbg_pu)
 );
 
 assign dbg_vbr  = vbr;

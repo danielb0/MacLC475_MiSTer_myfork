@@ -65,6 +65,8 @@ module ap68040_decode
 	output logic  [1:0] rq_n,
 	output dinst_t      rq0,
 	output dinst_t      rq1,
+	output logic        rq_push,      // a record enters the queue this clock ...
+	output dinst_t      rq_in,        // ... this one
 	input  logic        rq_pop,
 	input  logic        rq_pop_e,       // implies rq_pop, early (room)
 
@@ -803,6 +805,8 @@ wire room  = (rq_n != 2'd2) || rq_pop_e;
 wire stall = flush || hold_redir || d_redir_v || !room || bt_hold;
 wire fire  = (go || go_part) && !stall;
 wire push  = fire && go;
+assign rq_push = push;
+assign rq_in   = nrec_q;
 wire pop   = rq_pop && (rq_n != 2'd0);
 
 // loop exit table updates

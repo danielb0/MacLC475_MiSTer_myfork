@@ -30,6 +30,11 @@ module ap68040_useq
 	input  logic  [1:0] rq_n,
 	input  dinst_t      rq0,
 	input  dinst_t      rq1,
+	// the record D1 is pushing this clock: with no record waiting, the
+	// microcode ROM is addressed from it now, not from rq0 the clock after
+	// (one clock off the refill after every redirect)
+	input  logic        d_push,
+	input  dinst_t      d_rec,
 	output logic        rq_pop,
 	output logic        rq_pop_e,   // an early form: implies rq_pop (D1's room)
 
@@ -47,6 +52,15 @@ module ap68040_useq
 	output uop_t        uq0,
 	output s1_t         uq0s,       // ... and the second slot beside it
 	input  logic        uq_pop,     // the back end takes uq0 this cycle
+	// The uop to AG.  With the queue empty the uop being written goes to
+	// AG in the clock it is formed, not through uq0 the clock after: one
+	// clock off the refill after every redirect (and off any other time
+	// the queue has run dry).  The CPU's paths have about 14 ns to spare
+	// at this machine's 25 MHz.
+	output logic        uo_v,
+	output uop_t        uo_u,
+	output s1_t         uo_s,
+	input  logic        uq_rdy,     // the back end takes a uop this cycle if offered
 	output logic [19:0] dbg_pu      // observation only: dual-issue events (see the end)
 );
 
@@ -940,6 +954,9 @@ end
 // (the uop written: the sequencer's, or the waiting companion's)
 uop_t wu;
 s1_t  wus;
+assign uo_v = (uq_n != 2'd0) || wv;
+assign uo_u = (uq_n != 2'd0) ? uq0  : wu;
+assign uo_s = (uq_n != 2'd0) ? uq0s : wus;
 wire  wv = emit || c_emit;
 always_comb begin
 	wu  = c_emit ? cq_u : nu;
@@ -987,10 +1004,15 @@ always_comb begin
 		else if (stay)   na = upc;
 		else if (!uw.last) na = upc + 10'd1;
 		else if (!exc_mode && rq_n[1]) na = entry_point(rq1);        // next instruction
+		else if (!exc_mode && d_push)  na = entry_point(d_rec);      // ... arriving now
 		else nv = 1'b0;
 	end
 	else if (!uw_v && !exc_mode && !exc_pend && rq_n != 2'd0) begin
 		na = entry_point(rq0);                                         // first word
+		nv = 1'b1;
+	end
+	else if (!uw_v && !exc_mode && !exc_pend && d_push) begin
+		na = entry_point(d_rec);                                       // ... arriving now
 		nv = 1'b1;
 	end
 end
@@ -1046,7 +1068,7 @@ always_ff @(posedge clk) begin
 			uq1s <= (wv && uq_n == 2'd2) ? wus : uq1s;
 			uq_n <= wv ? uq_n : uq_n - 2'd1;
 		end
-		else begin
+		else if (!((uq_n == 2'd0) && wv && uq_rdy)) begin      // (not the uop AG takes directly)
 			uq0  <= (wv && uq_n == 2'd0) ? wu : uq0;
 			uq1  <= (wv && uq_n == 2'd1) ? wu : uq1;
 			uq0s <= (wv && uq_n == 2'd0) ? wus : uq0s;

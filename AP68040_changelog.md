@@ -514,3 +514,33 @@ LC 475's RAM timing; the estimate noted above is 10 (4-2-2-2).
   and unaligned operands (supposition 3). The bench's figures for those
   cases are sums or estimates of mine, not the manual's.
 - **Verified:** tests/timing sets 1 and 2, memsweep 360 of 360.
+
+## 21. The refill after a redirect: three clocks shorter
+
+- **Documentation:** the MC68040 prefetches both paths of a conditional
+  branch (7.x): Bcc 2 clocks taken, 3 not, whatever it did before; JMP
+  (An) 3. This core guesses one path, and a redirect refilled the whole
+  front: about 9 clocks from the redirect to AG.
+- **Timing margin:** at this machine's 25 MHz the CPU's slowest path has
+  about 14 ns to spare of 40 (the donor ran faster), so stages that only
+  register can be passed with room.
+- **Changes:**
+  - `ap68040_fetch.sv` (`fa`, `rf0`): the redirect's own clock is the F0
+    of its target. The cache, tag, BTB and I-ATC lookups take the target
+    address in that clock, where the redirect first loaded `fpc` and F0
+    ran the clock after.
+  - `ap68040_useq.sv` / `ap68040_decode.sv` (`d_push`, `d_rec`): with no
+    record waiting, the microcode ROM is addressed from the record D1 is
+    pushing, not from `rq0` the clock after.
+  - `ap68040_useq.sv` (`uo_v`, `uo_u`): with the uop queue empty the uop
+    being formed goes to AG in that clock, not through `uq0`.
+- **After** (clocks; the manual's figure last): alternating Bcc loop 18.6
+  -> 15.6 (9); two-turn loop 18.4 -> 15.4 (8); DBRA's exit 14 -> 11 (5);
+  `JSR (A2)` + `RTS` 16 -> 13 (8); `LEA` + `JMP (A0)` 14.3 -> 11.3 (5);
+  `TRAP #0` + `RTE` 56 -> 49 (29); `NOP` 14.9 -> 11.9 a pair (8). Over the
+  146 cases with a figure the excess over the manual fell from 228 clocks
+  to 162; no case newly under its figure.
+- **Tried and left off:** DUAL (1) leaves `MOVE.L (A0),(A1)` at 2 and puts
+  `MOVE.L D0,D1` at 0.98; BTIC (1) does nothing for a wrong guess.
+- **Verified:** tests/timing sets 1-4, run_cpu040 smoke/lc040/machine/mmu/
+  profile, memsweep 360 of 360. Not yet on the board.

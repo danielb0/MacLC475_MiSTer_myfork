@@ -315,6 +315,11 @@ endgenerate
 // I-ATC
 //--------------------------------------------------------------------------
 logic [31:0] fpc;              // F0 fetch address (A0 clear)
+// A redirect's own clock is the F0 of its target: the lookups below take the
+// target's address then (fa), and F1 has it the clock after -- where the
+// redirect first loaded fpc and F0 ran a clock later.  One clock off every
+// redirect; the address is a flip-flop's either way (rf0, below).
+logic [31:0] fa;
 
 // BTB: one array per word of the long word (a branch ending at word 0,
 // one ending at word 1), each valid, tag, kind, target[31:1]: two taken
@@ -331,7 +336,7 @@ logic [BTB_DW-1:0] btb_qa [FW];
 logic [BTB_DW-1:0] btb_q;
 logic        btb_cf;
 wire [BTB_RW-1:0] btb_wa = btb_wi[BTB_AW-1 -: BTB_RW];
-wire [BTB_RW-1:0] btb_ra = fpc[BTB_AW+1 -: BTB_RW];
+wire [BTB_RW-1:0] btb_ra = fa[BTB_AW+1 -: BTB_RW];
 wire [FWL-1:0]    btb_ws = FWL'({btb_wi[0], btb_wslot});
 genvar gb;
 generate
@@ -437,7 +442,7 @@ logic        atc_hit;
 atce_t       atc_e;
 ap68040_atc #(.SAME_SEARCH(0)) iatc (
 	.clk(clk), .nreset(nreset), .p8k(tc_p),
-	.la(iatc_flush_page ? iatc_flush_la : fpc),
+	.la(iatc_flush_page ? iatc_flush_la : fa),
 	.fc2(iatc_flush_page ? iatc_flush_fc2 : smode), .set_m(4'd0),
 	.hit(atc_hit), .ent(atc_e), .hv(), .wpa(),
 	.la_d(32'd0), .fc2_d(1'b0), .set_d(4'd0), .hv_d(), .wpa_d(),
@@ -504,17 +509,17 @@ generate
 			// memories: a beat is written to its own
 			ap68040_sdp_be #(.AW(CSB+1), .NB(4), .OREG(0)) dram_h (
 				.clk(clk), .we(c_dwe_w[gw] && !b_rbeat[0]), .waddr({m_pa[CSH:4], b_rbeat[1]}),
-				.wbe(4'hF), .wdata(b_rdata), .raddr(fpc[CSH:3]), .oce(1'b1), .q(cd[gw][63:32])
+				.wbe(4'hF), .wdata(b_rdata), .raddr(fa[CSH:3]), .oce(1'b1), .q(cd[gw][63:32])
 			);
 			ap68040_sdp_be #(.AW(CSB+1), .NB(4), .OREG(0)) dram_l (
 				.clk(clk), .we(c_dwe_w[gw] && b_rbeat[0]), .waddr({m_pa[CSH:4], b_rbeat[1]}),
-				.wbe(4'hF), .wdata(b_rdata), .raddr(fpc[CSH:3]), .oce(1'b1), .q(cd[gw][31:0])
+				.wbe(4'hF), .wdata(b_rdata), .raddr(fa[CSH:3]), .oce(1'b1), .q(cd[gw][31:0])
 			);
 		end
 		else begin : g_lw
 			ap68040_sdp_be #(.AW(CSB+2), .NB(4), .OREG(0)) dram (
 				.clk(clk), .we(c_dwe_w[gw]), .waddr({m_pa[CSH:4], b_rbeat}),
-				.wbe(4'hF), .wdata(b_rdata), .raddr(fpc[CSH:2]), .oce(1'b1), .q(cd[gw][31:0])
+				.wbe(4'hF), .wdata(b_rdata), .raddr(fa[CSH:2]), .oce(1'b1), .q(cd[gw][31:0])
 			);
 			assign cd[gw][63:32] = 32'd0;
 		end
@@ -573,6 +578,7 @@ logic [31:0] inv_pa;
 
 wire        redir_any = redir_v || d_redir_v;
 wire [31:0] redir_npc = redir_v ? redir_pc : d_redir_pc;
+assign      fa = redir_any ? {redir_npc[31:1], 1'b0} : fpc;
 
 //--------------------------------------------------------------------------
 // F1 evaluation
@@ -674,8 +680,12 @@ wire       tj_go    = tj_v && f3_go && ({1'b0, cnt} + inflight0 <= 6'(QN - 2));
 // meet that every fourth turn in the queue)
 wire       f0_go    = (st == S_RUN) && !odd && !stop && !redir_any &&
                       !iatc_flush_page && !inv_busy && !sn_inv && room && (bt_room || !HL);
+// the redirect's clock as its target's F0 (the queue and the target list
+// are emptied by the redirect itself: there is room)
+wire       rf0      = redir_any && (st == S_RUN) && !redir_npc[0] && !stop &&
+                      !iatc_flush_page && !inv_busy && !sn_inv;
 
-assign c_raddr = inv_busy ? inv_i[CSB-1:0] : fpc[CSH:4];
+assign c_raddr = inv_busy ? inv_i[CSB-1:0] : fa[CSH:4];
 
 //--------------------------------------------------------------------------
 // BIU request
@@ -1165,6 +1175,21 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 			qpc_r <= redir_npc;
 			odd   <= redir_npc[0];
 			fnew  <= 1'b1;
+			if (rf0) begin
+				// (this clock was the target's F0: see fa)
+				f1_v    <= 1'b1;
+				f1_btok <= 1'b1;
+				f1_pc   <= fa;
+				f1_s    <= smode;
+				f1_tt0  <= ttr_hit(itt0, fa, smode);
+				f1_tt1  <= ttr_hit(itt1, fa, smode);
+				f1_tce  <= tc_e;
+				f1_dem  <= 1'b1;
+				f1_hit  <= atc_hit;
+				f1_e    <= atc_e;
+				fnew    <= 1'b0;
+				fpc     <= HL ? {fa[31:3], 3'b000} + 32'd8 : {fa[31:2], 2'b00} + 32'd4;
+			end
 			if (st == S_FILL || st == S_CI) begin
 				if (out_next) stale <= 1'b1;
 				else st <= S_RUN;
