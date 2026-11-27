@@ -667,8 +667,12 @@ assign     f3_go    = !HL || ({1'b0, keep_w} + {3'd0, f3_n} <= 6'(QN));
 // target words wait for room as a fetch would (F0 waits behind them)
 wire       tj_go    = tj_v && f3_go && ({1'b0, cnt} + inflight0 <= 6'(QN - 2));
 // a snooped invalidation goes first (the snooper has priority, 4.5)
+// (and F0 waits for a place in the target FIFO: a fetch issued without one
+// could not take a BTB hit, ran on past the branch and was redirected by the
+// decoder -- with half-line fetches a short loop got far enough ahead to
+// meet that every fourth turn in the queue)
 wire       f0_go    = (st == S_RUN) && !odd && !stop && !redir_any &&
-                      !iatc_flush_page && !inv_busy && !sn_inv && room;
+                      !iatc_flush_page && !inv_busy && !sn_inv && room && (bt_room || !HL);
 
 assign c_raddr = inv_busy ? inv_i[CSB-1:0] : fpc[CSH:4];
 

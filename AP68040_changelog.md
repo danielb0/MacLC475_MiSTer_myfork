@@ -332,3 +332,22 @@ Clocks per instruction, code cached, ideal memory; the manual's figure first.
   memory** (the bus: 5). After the last beat the fetch looks the line up
   in the cache again (4 clocks to the queue), the words take 4 more
   through decode to AG, and the next line's miss is found only then.
+
+## 11. The fetch waits for a place in the branch-target list
+
+- **Found by** the board: with entry 9 Norton's Search fell 2.7% and Sort
+  1% against entry 8 alone (0.691 -> 0.672, 0.710 -> 0.703), and on the
+  bench the loop `SUBQ.L #1,D0 / BNE.S` went from 3.12 to 3.20 clocks a turn.
+- **Cause:** the queue's words that end a BTB-taken branch have their targets
+  in a list of four (`tq`). A fetch issued with the list full (`bt_room`
+  false) could not take its BTB hit, ran on past the branch and was
+  redirected by the decoder. With half-line fetches the fetch gets ahead of
+  a short loop until four turns wait in the queue; the trace shows the
+  decoder's redirect every 34 clocks.
+- **Change** (`ap68040_fetch.sv` `f0_go`): with HLF, F0 waits for a place in
+  the list. The words already queued are at least four instructions.
+- **After:** the loop 3.11 (manual 3). Of the three sets only three other
+  cases moved, each by under 0.1 clock: `MOVE.B (A0)+,(A1)+ / DBRA` 5.15 ->
+  5.12, `BRA.S` + 3-word instruction 3.02 -> 2.98, `BSR.W / RTS` 6.97 -> 7.06.
+- **Verified:** tests/timing sets 1-3, run_cpu040 smoke/lc040/machine/mmu/
+  profile, memsweep 360 of 360. Not yet on the board.
