@@ -68,6 +68,11 @@ module ap68040_fetch
 	import ap68040_pkg::*, ap68040_upkg::*;
 #(
 	parameter bit BTIC = 1,         // the BTB entries' target words
+	// A fetch is a half-line, four words, from its address to the half-line's
+	// end (MC68040UM 4.7.1: a hit puts the half-line selected by address bit 3
+	// on the instruction bus); 0: a long word, two.  Not with BTIC, whose
+	// target words are a long word: BTIC keeps the long word.
+	parameter bit HLF  = 1,
 	parameter logic [2:0] S1_CLASSES = 3'b111,  // second-slot classes marked: {load, An, Dn}
 	parameter logic [3:0] S1_LDMASK  = 4'b1111  // ... of the loads: {TST (Ay), ALU (Ay),Dx, MOVEA.L (Ay),Ax, MOVE (Ay),Dx}
 )(
@@ -166,6 +171,11 @@ localparam int CSB = 6;
 localparam int CSH = CSB + 3;
 localparam int CTW = 28 - CSB;
 
+// the fetch's chunk: FW words, a word's place in it FWL bits
+localparam bit HL  = HLF && !BTIC;
+localparam int FW  = HL ? 4 : 2;
+localparam int FWL = HL ? 2 : 1;
+
 wire tc_e  = tc[15] && !mdis;
 wire tc_p  = tc[14];
 wire ic_en = cacr[15] && !cdis;
@@ -183,10 +193,13 @@ logic [15:0]   qw [QN];
 // the words' predecode: D1 reads only the head's, so it is a ring (no
 // shift) with the head in a register (qp0) -- loaded as D1 consumes from
 // the ring, or from F3 when the queue empties into it
-// (two LUT RAM banks by slot parity: F3's two words land in consecutive
+// (FW LUT RAM banks by the slot's low bits: F3's words land in consecutive
 // slots, one per bank, so each bank has one write a cycle)
-(* ramstyle = "MLAB, no_rw_check" *) logic [$bits(pd_t)-1:0] qpr_e [8];
-(* ramstyle = "MLAB, no_rw_check" *) logic [$bits(pd_t)-1:0] qpr_o [8];
+logic [$bits(pd_t)-1:0] qpr_q [FW];     // each bank at the next head's row
+logic [FW-1:0]          qpr_we;
+logic [3-FWL:0]         qpr_wa [FW];
+logic [$bits(pd_t)-1:0] qpr_wd [FW];
+logic                   f3_go;          // F3's words join the queue this cycle
 logic  [3:0]   qh;             // the ring's head
 pd_t           qp0;
 // synthesis translate_off
@@ -209,7 +222,28 @@ assign pd0   = qp0;
 // attribute ROM reads it a cycle ahead
 wire [3:0] qh_n = qwrap(5'(qh) + {2'b00, consume});        // the head next cycle
 pd_t       qpr_rd;
-assign qpr_rd = pd_t'(qh_n[0] ? qpr_o[qh_n[3:1]] : qpr_e[qh_n[3:1]]);
+assign qpr_rd = pd_t'(qpr_q[qh_n[FWL-1:0]]);
+always_comb begin
+	qpr_we = '0;
+	for (int b = 0; b < FW; b++) begin qpr_wa[b] = '0; qpr_wd[b] = '0; end
+	for (int j = 0; j < FW; j++) begin
+		logic [3:0] w;
+		w = qwrap(5'(qh) + cnt + 5'(j));
+		if (3'(j) < f3_n && f3_go) begin
+			qpr_we[w[FWL-1:0]] = 1'b1;
+			qpr_wa[w[FWL-1:0]] = w[3:FWL];
+			qpr_wd[w[FWL-1:0]] = f3_p[j];
+		end
+	end
+end
+genvar gq;
+generate
+	for (gq = 0; gq < FW; gq++) begin : g_qpr
+		(* ramstyle = "MLAB, no_rw_check" *) logic [$bits(pd_t)-1:0] m [16 / FW];
+		always_ff @(posedge clk) if (nreset && qpr_we[gq]) m[qpr_wa[gq]] <= qpr_wd[gq];
+		assign qpr_q[gq] = m[qh_n[3:FWL]];
+	end
+endgenerate
 assign pd0_n = (cnt == {2'b00, consume}) ? f3_p[0] : qpr_rd;
 function automatic logic [3:0] qwrap(input logic [4:0] x);   // x mod QN, x < 2*QN
 	qwrap = (x >= 5'(QN)) ? 4'(x - 5'(QN)) : x[3:0];
@@ -230,41 +264,45 @@ assign bt_tgt = {tq[0], 1'b0};
 // F2: the words of a chunk, their table words read (ap68040_pdrom, the
 // words a cycle after their addresses); F3: predecoded from the table
 // words and appended this cycle
-logic  [1:0]  f2_n;
-logic [15:0]  f2_w [2];
+logic  [2:0]  f2_n;
+logic [15:0]  f2_w [FW];
 logic         f2_f, f2_d, f2_a;
-logic  [1:0]  f2_b;            // the word ends a BTB-taken branch
+logic [FW-1:0] f2_b;           // the word ends a BTB-taken branch
 logic [30:0]  f2_t;
-logic  [1:0]  f3_n;
-logic [15:0]  f3_w [2];
-pdw_t         f3_r [2];        // the table's words for f3_w
-pd_t          f3_p [2];
+logic  [2:0]  f3_n;
+logic [15:0]  f3_w [FW];
+pdw_t         f3_r [FW];       // the table's words for f3_w
+pd_t          f3_p [FW];
 logic         f3_f, f3_d, f3_a;
-logic  [1:0]  f3_b;
-logic  [1:0]  f3_s;            // s1_dec(f3_w[i]).v, decoded in F2
+logic [FW-1:0] f3_b;
+logic [FW-1:0] f3_s;           // s1_dec(f3_w[i]).v, decoded in F2
 // (each word's s1_dec a named result: Vivado 2023.2 synthesizes the
 // member of a function call's result, `s1_dec(w).v`, as a constant 0 --
 // f3_s_reg removed, no second-slot word ever marked, dual issue off on
 // the board while every simulator paired)
-s1_t          f2_s1 [2];
-always_comb for (int i = 0; i < 2; i++) f2_s1[i] = s1_dec(f2_w[i]);
+s1_t          f2_s1 [FW];
+always_comb for (int i = 0; i < FW; i++) f2_s1[i] = s1_dec(f2_w[i]);
 // a second-slot load's kind, for S1_LDMASK: 0 MOVE (Ay),Dx, 1 MOVEA.L (Ay),Ax,
 // 2 ADD/SUB/AND/OR/CMP (Ay),Dx, 3 TST (Ay)
 function automatic logic [1:0] s1_ldk(input s1_t s);
 	s1_ldk = !s.d_v && s.op == S1_MOV ? 2'd3 : s.op != S1_MOV ? 2'd2 : s.d_reg[3] ? 2'd1 : 2'd0;
 endfunction
 logic [30:0]  f3_t;
-ap68040_pdrom pdrom (.clk(clk), .a0(f2_w[0][15:3]), .a1(f2_w[1][15:3]), .q0(f3_r[0]), .q1(f3_r[1]));
 genvar gp;
 generate
-	for (gp = 0; gp < 2; gp++) begin : g_pd
+	// (a table per pair of words: it has two reads)
+	for (gp = 0; gp < FW / 2; gp++) begin : g_pdrom
+		ap68040_pdrom pdrom (.clk(clk), .a0(f2_w[2*gp][15:3]), .a1(f2_w[2*gp+1][15:3]),
+		                     .q0(f3_r[2*gp]), .q1(f3_r[2*gp+1]));
+	end
+	for (gp = 0; gp < FW; gp++) begin : g_pd
 		ap68040_predec pd (.op(f3_w[gp]), .w(f3_r[gp]), .pd(f3_p[gp]));
 		// synthesis translate_off
 		// (the table form against the parallel pattern decoder)
 		pd_t pd_ref;
 		ap68040_predec_pla pdr (.op(f3_w[gp]), .pd(pd_ref));
 		always_ff @(posedge clk)
-			if (nreset && f3_n > 2'(gp) && f3_p[gp] !== pd_ref) begin
+			if (nreset && f3_n > 3'(gp) && f3_p[gp] !== pd_ref) begin
 				$display("FAIL: fetch: the table predecode of %04x is %h, the pattern decoder's %h", f3_w[gp], f3_p[gp], pd_ref);
 				$finish;
 			end
@@ -285,25 +323,39 @@ localparam int BTB_DW = 1 + BTB_TW + 2 + 31;
 logic [31:0] f1_pc;              // F1's address
 // (block RAM: F0 presents fpc, F1 compares with f1_pc; an entry D1 writes
 // at the edge F0's read registers it is not trusted -- no prediction)
-logic [BTB_DW-1:0] btb_q0, btb_q1, btb_q;
+// (a half-line's fetch: four arrays of half the rows, the entry's row
+// PC[BTB_AW+1:3] and its array PC[2:1] -- the same entries, the same tags)
+localparam int BTB_RW = BTB_AW + 1 - FWL;
+logic [BTB_DW-1:0] btb_qa [FW];
+logic [BTB_DW-1:0] btb_q;
 logic        btb_cf;
-ap68040_sdpr #(.AW(BTB_AW), .DW(BTB_DW)) btb0 (
-	.clk(clk), .we(btb_we && !btb_wslot), .waddr(btb_wi),
-	.wdata({btb_wv, btb_wtag, btb_wkind, btb_wtgt}),
-	.raddr(fpc[BTB_AW+1:2]), .q(btb_q0)
-);
-ap68040_sdpr #(.AW(BTB_AW), .DW(BTB_DW)) btb1 (
-	.clk(clk), .we(btb_we && btb_wslot), .waddr(btb_wi),
-	.wdata({btb_wv, btb_wtag, btb_wkind, btb_wtgt}),
-	.raddr(fpc[BTB_AW+1:2]), .q(btb_q1)
-);
-always_ff @(posedge clk) btb_cf <= btb_we && (btb_wi == fpc[BTB_AW+1:2]);
-// the first branch of the fetch: word 0's when the fetch starts there
-wire btb_hit0 = !btb_cf && btb_q0[BTB_DW-1] && btb_q0[BTB_DW-2 -: BTB_TW] == f1_pc[31:BTB_AW+2] && !f1_pc[1];
-wire btb_hit1 = !btb_cf && btb_q1[BTB_DW-1] && btb_q1[BTB_DW-2 -: BTB_TW] == f1_pc[31:BTB_AW+2];
-wire btb_hit  = btb_hit0 || btb_hit1;
-wire btb_qslot = !btb_hit0;
-assign btb_q   = btb_hit0 ? btb_q0 : btb_q1;
+wire [BTB_RW-1:0] btb_wa = btb_wi[BTB_AW-1 -: BTB_RW];
+wire [BTB_RW-1:0] btb_ra = fpc[BTB_AW+1 -: BTB_RW];
+wire [FWL-1:0]    btb_ws = FWL'({btb_wi[0], btb_wslot});
+genvar gb;
+generate
+	for (gb = 0; gb < FW; gb++) begin : g_btb
+		ap68040_sdpr #(.AW(BTB_RW), .DW(BTB_DW)) btb (
+			.clk(clk), .we(btb_we && btb_ws == FWL'(gb)), .waddr(btb_wa),
+			.wdata({btb_wv, btb_wtag, btb_wkind, btb_wtgt}),
+			.raddr(btb_ra), .q(btb_qa[gb])
+		);
+	end
+endgenerate
+always_ff @(posedge clk) btb_cf <= btb_we && (btb_wa == btb_ra);
+// the first branch of the fetch: the first that ends at or after its start
+logic           btb_hit;
+logic [FWL-1:0] btb_hslot;
+always_comb begin
+	btb_hit = 1'b0; btb_hslot = '0;
+	for (int i = FW - 1; i >= 0; i--)
+		if (!btb_cf && btb_qa[i][BTB_DW-1] && btb_qa[i][BTB_DW-2 -: BTB_TW] == f1_pc[31:BTB_AW+2] &&
+		    FWL'(i) >= f1_pc[FWL:1]) begin
+			btb_hit = 1'b1; btb_hslot = FWL'(i);
+		end
+end
+wire btb_qslot = btb_hslot[0];           // (the target words': BTIC, a long word)
+assign btb_q   = btb_qa[btb_hslot];
 
 // the target words: {S, target[31:1], the long word} per entry in block
 // RAM beside the BTB's (read with it), their valid bits in LUT RAM
@@ -421,7 +473,7 @@ logic          c_we;
 logic [CSB-1:0] c_waddr;
 logic  [1:0]   c_wway;
 logic [CTW-1:0] c_wtag;
-logic [31:0]   cd [4];        // each way's long word at F1's address
+logic [63:0]   cd [4];        // each way's long word (half-line: HL) at F1's address
 logic [23:0]   ct [4];
 
 logic [31:0] m_cw;               // the fill's first long word (the one fetched)
@@ -446,10 +498,25 @@ wire [3:0] c_we_w  = c_we  ? 4'b0001 << c_wway : 4'b0000;
 genvar gw;
 generate
 	for (gw = 0; gw < 4; gw++) begin : g_way
-		ap68040_sdp_be #(.AW(CSB+2), .NB(4), .OREG(0)) dram (
-			.clk(clk), .we(c_dwe_w[gw]), .waddr({m_pa[CSH:4], b_rbeat}),
-			.wbe(4'hF), .wdata(b_rdata), .raddr(fpc[CSH:2]), .oce(1'b1), .q(cd[gw])
-		);
+		if (HL) begin : g_hl
+			// a half-line per address ({set, A3}), its long words in two
+			// memories: a beat is written to its own
+			ap68040_sdp_be #(.AW(CSB+1), .NB(4), .OREG(0)) dram_h (
+				.clk(clk), .we(c_dwe_w[gw] && !b_rbeat[0]), .waddr({m_pa[CSH:4], b_rbeat[1]}),
+				.wbe(4'hF), .wdata(b_rdata), .raddr(fpc[CSH:3]), .oce(1'b1), .q(cd[gw][63:32])
+			);
+			ap68040_sdp_be #(.AW(CSB+1), .NB(4), .OREG(0)) dram_l (
+				.clk(clk), .we(c_dwe_w[gw] && b_rbeat[0]), .waddr({m_pa[CSH:4], b_rbeat[1]}),
+				.wbe(4'hF), .wdata(b_rdata), .raddr(fpc[CSH:3]), .oce(1'b1), .q(cd[gw][31:0])
+			);
+		end
+		else begin : g_lw
+			ap68040_sdp_be #(.AW(CSB+2), .NB(4), .OREG(0)) dram (
+				.clk(clk), .we(c_dwe_w[gw]), .waddr({m_pa[CSH:4], b_rbeat}),
+				.wbe(4'hF), .wdata(b_rdata), .raddr(fpc[CSH:2]), .oce(1'b1), .q(cd[gw][31:0])
+			);
+			assign cd[gw][63:32] = 32'd0;
+		end
 		ap68040_sdp_be #(.AW(CSB), .NB(3), .OREG(0)) tram (
 			.clk(clk), .we(c_we_w[gw]), .waddr(c_waddr),
 			.wbe(3'b111), .wdata(24'(c_wtag)), .raddr(c_raddr), .oce(1'b1), .q(ct[gw])
@@ -475,7 +542,7 @@ logic        fnew;             // the next F0 starts a redirected stream
 logic        f1_v;
 logic        f1_btok;           // F0 had room for a taken branch's target
 wire         f1_bt    = f1_btok && btb_hit;   // the BTB hit (in F1)
-wire         f1_bslot = btb_qslot;            // ... where the branch ends
+wire [FWL-1:0] f1_bslot = btb_hslot;          // ... where the branch ends
 wire   [1:0] f1_bkind = btb_q[32:31];
 wire  [30:0] f1_btgt  = btb_q[30:0];
 logic        f1_s, f1_dem;
@@ -512,7 +579,9 @@ wire [31:0] redir_npc = redir_v ? redir_pc : d_redir_pc;
 logic        x_ok, x_flt, x_walk, x_cach, x_hit;
 logic [31:0] x_pa;
 logic  [1:0] x_cm, x_upa, x_way;
-logic [31:0] x_chunk;
+logic [63:0] x_hl;             // the hit way's long word (HL: half-line)
+logic [31:0] x_chunk;          // the long word at F1's address
+logic [15:0] x_w [FW];         // the chunk's words, by their place in it
 logic  [3:0] x_mj;
 // the ITT matches are formed in F0 (the TTRs change only by MOVEC, which
 // serializes and refetches), so F1 starts from them
@@ -560,9 +629,16 @@ always_comb begin
 	x_hit  = x_hit && x_cach;
 	// (the chunk by the one-hot match, AND-OR: no encoded way on the path;
 	// at most one way holds a line)
-	x_chunk = '0;
-	for (int i = 0; i < 4; i++) if (x_mj[i]) x_chunk = x_chunk | cd[i];
+	x_hl = '0;
+	for (int i = 0; i < 4; i++) if (x_mj[i]) x_hl = x_hl | cd[i];
+	x_chunk = (HL && !f1_pc[2]) ? x_hl[63:32] : x_hl[31:0];
+	for (int i = 0; i < FW; i++) x_w[i] = x_hl[(FW-1-i)*16 +: 16];
 end
+// the chunk F1 delivers: from its address to the chunk's end, or to the
+// last word of the branch the BTB takes
+wire [FWL-1:0] f1_o   = f1_pc[FWL:1];
+wire     [2:0] f1_nsq = 3'(FW) - 3'(f1_o);
+wire     [2:0] f1_ntk = 3'(f1_bslot) - 3'(f1_o) + 3'd1;
 wire f1_go      = f1_v && !redir_any;
 wire f1_deliver = f1_go && x_hit;
 // the hit entry has words, for this mode
@@ -577,13 +653,19 @@ wire tw_fill = BTIC && pf_v && f1_deliver && f1_pc[31:1] == pf_t && !btb_hit && 
 //--------------------------------------------------------------------------
 // F0 issue: room for this chunk and those in flight
 //--------------------------------------------------------------------------
-wire [5:0] inflight0 = (f1_v ? 6'd2 : 6'd0) + {4'd0, f2_n} + {4'd0, f3_n};
+wire [5:0] inflight0 = (f1_v ? 6'(FW) : 6'd0) + {3'd0, f2_n} + {3'd0, f3_n};
 wire [5:0] inflight  = inflight0 + (tj_v ? 6'd2 : 6'd0);
 // the target FIFO cannot overflow: count the flagged words on their way
 wire       bt_room  = ({1'b0, tq_n} + {3'd0, f1_v && f1_bt} + {3'd0, |f2_b} + {3'd0, |f3_b}) < 4'd4;
-wire       room     = {1'b0, cnt} + inflight <= 6'(QN - 2);
+// (HL: F3 waits when the queue cannot take its words, so F0 needs room
+// only for the words ahead of its own chunk -- which then is the one chunk
+// that can wait, with nothing behind it)
+wire       room     = {1'b0, cnt} + inflight <= (HL ? 6'(QN) : 6'(QN - 2));
+// F3's words join the queue (HL: when they fit)
+wire [4:0] keep_w   = cnt - {2'b00, consume};
+assign     f3_go    = !HL || ({1'b0, keep_w} + {3'd0, f3_n} <= 6'(QN));
 // target words wait for room as a fetch would (F0 waits behind them)
-wire       tj_go    = tj_v && ({1'b0, cnt} + inflight0 <= 6'(QN - 2));
+wire       tj_go    = tj_v && f3_go && ({1'b0, cnt} + inflight0 <= 6'(QN - 2));
 // a snooped invalidation goes first (the snooper has priority, 4.5)
 wire       f0_go    = (st == S_RUN) && !odd && !stop && !redir_any &&
                       !iatc_flush_page && !inv_busy && !sn_inv && room;
@@ -649,9 +731,9 @@ always_ff @(posedge clk) begin
 		qs    <= '0; f3_s <= '0;
 		for (int i = 0; i < 4; i++) tq[i] <= '0;
 		f2_n  <= '0; f2_f <= 1'b0; f2_d <= 1'b0; f2_a <= 1'b0;
-		for (int i = 0; i < 2; i++) f2_w[i] <= '0;
+		for (int i = 0; i < FW; i++) f2_w[i] <= '0;
 		f3_n  <= '0; f3_f <= 1'b0; f3_d <= 1'b0; f3_a <= 1'b0;
-		for (int i = 0; i < 2; i++) f3_w[i] <= '0;
+		for (int i = 0; i < FW; i++) f3_w[i] <= '0;
 		m_tci <= 1'b0;
 		busy  <= 1'b0; stale <= 1'b0; b_req_r <= 1'b0;
 		m_la  <= '0; m_pa <= '0; m_upa <= '0; m_s <= 1'b0; m_dem <= 1'b0; m_ci <= 1'b0;
@@ -699,32 +781,23 @@ always_ff @(posedge clk) begin
 				qb[i] <= qb[src[4:0]];
 				qs[i] <= qs[src[4:0]];
 			end
-			else if (k < {3'b000, f3_n}) begin
+			else if (k < {2'b00, f3_n} && f3_go) begin
 				// synthesis translate_off
-				qps[i] <= f3_p[k[0]];
+				qps[i] <= f3_p[k[FWL-1:0]];
 				// synthesis translate_on
-				qw[i] <= f3_w[k[0]];
+				qw[i] <= f3_w[k[FWL-1:0]];
 				qf[i] <= f3_f;
 				qd[i] <= f3_d;
 				qa[i] <= f3_a;
-				qb[i] <= f3_b[k[0]];
-				qs[i] <= f3_s[k[0]];
+				qb[i] <= f3_b[k[FWL-1:0]];
+				qs[i] <= f3_s[k[FWL-1:0]];
 			end
 		end
-		cnt   <= keep + {3'b000, f3_n};
+		cnt   <= keep + (f3_go ? {2'b00, f3_n} : 5'd0);
 		// the predecode ring: appended at head + count (wherever D1's
 		// consume puts the head), the head moved by consume
 		begin
-			// (one write statement per bank, the word by the slot's parity:
-			// two statements read as two write ports and keep it in logic)
-			logic [3:0] w0, w1;
-			logic       we_e, we_o;
-			w0 = qwrap(5'(qh) + cnt);
-			w1 = qwrap(5'(qh) + cnt + 5'd1);
-			we_e = (f3_n != 2'd0 && !w0[0]) || (f3_n == 2'd2 && !w1[0]);
-			we_o = (f3_n != 2'd0 &&  w0[0]) || (f3_n == 2'd2 &&  w1[0]);
-			if (we_e) qpr_e[w0[0] ? w1[3:1] : w0[3:1]] <= w0[0] ? f3_p[1] : f3_p[0];
-			if (we_o) qpr_o[w0[0] ? w0[3:1] : w1[3:1]] <= w0[0] ? f3_p[0] : f3_p[1];
+			// (the banks' writes: g_qpr)
 			qh  <= qh_n;
 			qp0 <= pd0_n;
 		end
@@ -748,27 +821,35 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				for (int i = 0; i < 3; i++) tqn[i] = tqn[i + 1];
 				n = n - 3'd1;
 			end
-			if (f3_n != 2'd0 && f3_b != 2'b00 && n != 3'd4) begin
+			if (f3_n != 3'd0 && f3_go && f3_b != '0 && n != 3'd4) begin
 				tqn[n[1:0]] = f3_t;
 				n = n + 3'd1;
 			end
 			for (int i = 0; i < 4; i++) tq[i] <= tqn[i];
 			tq_n <= n;
 		end
-		f3_n  <= f2_n;
-		f3_f  <= f2_f; f3_d <= f2_d; f3_a <= f2_a;
-		f3_b  <= f2_b; f3_t <= f2_t;
-		for (int i = 0; i < 2; i++) f3_w[i] <= f2_w[i];
-		for (int i = 0; i < 2; i++)
-			f3_s[i] <= f2_s1[i].v && (f2_s1[i].ld ? S1_CLASSES[2] && S1_LDMASK[s1_ldk(f2_s1[i])] :
-			                          f2_s1[i].agop ? S1_CLASSES[1] : S1_CLASSES[0]);
+		if (f3_go) begin
+			f3_n  <= f2_n;
+			f3_f  <= f2_f; f3_d <= f2_d; f3_a <= f2_a;
+			f3_b  <= f2_b; f3_t <= f2_t;
+			for (int i = 0; i < FW; i++) f3_w[i] <= f2_w[i];
+			for (int i = 0; i < FW; i++)
+				f3_s[i] <= f2_s1[i].v && (f2_s1[i].ld ? S1_CLASSES[2] && S1_LDMASK[s1_ldk(f2_s1[i])] :
+				                          f2_s1[i].agop ? S1_CLASSES[1] : S1_CLASSES[0]);
+		end
+		// synthesis translate_off
+		else if (f2_n != 3'd0 || f1_v) begin
+			$display("FAIL: fetch: F3 waits for the queue with a chunk behind it");
+			$finish;
+		end
+		// synthesis translate_on
 		f2_n  <= '0;
 		f2_b  <= '0;
 		// the target words of the BTB-taken branch F1 delivered (when
 		// there is room for them)
 		if (tj_go) begin
 			tj_v    <= 1'b0;
-			f2_n    <= tj_n2 ? 2'd2 : 2'd1;
+			f2_n    <= tj_n2 ? 3'd2 : 3'd1;
 			f2_w[0] <= tj_n2 ? tj_w[31:16] : tj_w[15:0];
 			f2_w[1] <= tj_w[15:0];
 			f2_f <= 1'b0; f2_d <= 1'b0; f2_a <= 1'b0;
@@ -798,7 +879,7 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 			f1_hit <= atc_hit;
 			f1_e   <= atc_e;
 			fnew   <= 1'b0;
-			fpc    <= {fpc[31:2], 2'b00} + 32'd4;
+			fpc    <= HL ? {fpc[31:3], 3'b000} + 32'd8 : {fpc[31:2], 2'b00} + 32'd4;
 		end
 
 		//------------------------------------------------------------------
@@ -806,9 +887,8 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 		// rolls back to the missed address
 		//------------------------------------------------------------------
 		if (f1_deliver) begin
-			f2_n    <= f1_pc[1] ? 2'd1 : 2'd2;
-			f2_w[0] <= f1_pc[1] ? x_chunk[15:0] : x_chunk[31:16];
-			f2_w[1] <= x_chunk[15:0];
+			f2_n    <= f1_nsq;
+			for (int i = 0; i < FW; i++) f2_w[i] <= x_w[FWL'(f1_o + FWL'(i))];
 			f2_f <= 1'b0; f2_d <= 1'b0; f2_a <= 1'b0;
 			if (f1_bt && !(f1_bkind == 2'd2 && fras_n == 4'd0)) begin
 				// a predicted taken branch ends in this chunk: the words up
@@ -823,10 +903,10 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				logic        tu, one;
 				t   = (f1_bkind == 2'd2) ? fras[fras_tp] : f1_btgt;
 				tu  = tw_hit && f1_bkind != 2'd2;
-				one = f1_pc[1] || !f1_bslot;
-				f2_n <= (one && !tu) ? 2'd1 : 2'd2;
-				f2_b <= one ? 2'b01 : 2'b10;
-				if (one) f2_w[1] <= t[0] ? tw_lw[15:0] : tw_lw[31:16];
+				one = (f1_ntk == 3'd1);
+				f2_n <= (one && tu) ? 3'd2 : f1_ntk;
+				f2_b <= FW'(1) << (f1_ntk - 3'd1);
+				if (one && tu) f2_w[1] <= t[0] ? tw_lw[15:0] : tw_lw[31:16];
 				f2_t <= t;
 				f1_v <= 1'b0;
 				f1_btok <= 1'b0;
@@ -838,13 +918,13 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				if (BTIC && !tw_hit && f1_bkind != 2'd2) begin
 					pf_v    <= 1'b1;
 					pf_i    <= f1_pc[BTB_AW+1:2];
-					pf_slot <= f1_bslot;
+					pf_slot <= f1_bslot[0];
 					pf_t    <= t;
 				end
 				if (f1_bkind == 2'd1) begin
 					frw  = 1'b1;
 					frwa = fras_tp + 3'd1;
-					frwd = {f1_pc[31:2], f1_bslot} + 31'd1;
+					frwd = {f1_pc[31:FWL+1], f1_bslot} + 31'd1;
 					fras_tp <= fras_tp + 3'd1;
 					if (fras_n != 4'd8) fras_n <= fras_n + 4'd1;
 				end
@@ -869,9 +949,9 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				iw_req <= 1'b1;
 			end
 			else if (x_flt) begin
-				// ATC fault: the long word's words carry it
-				f2_n <= f1_pc[1] ? 2'd1 : 2'd2;
-				for (int i = 0; i < 2; i++) f2_w[i] <= 16'd0;
+				// ATC fault: the chunk's words carry it
+				f2_n <= f1_nsq;
+				for (int i = 0; i < FW; i++) f2_w[i] <= 16'd0;
 				f2_f <= 1'b1; f2_d <= f1_dem; f2_a <= 1'b1;
 				st   <= S_HALT;
 			end
@@ -946,11 +1026,11 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 						lw  = lw0;
 						nla = {m_la[31:2], 2'b00} + 32'd4;
 						if (m_la[1]) begin
-							f2_n    <= 2'd1;
+							f2_n    <= 3'd1;
 							f2_w[0] <= lw[15:0];
 						end
 						else begin
-							f2_n    <= 2'd2;
+							f2_n    <= 3'd2;
 							f2_w[0] <= lw[31:16];
 							f2_w[1] <= lw[15:0];
 						end
@@ -976,11 +1056,11 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 					lw  = lw0;
 					nla = {m_la[31:2], 2'b00} + 32'd4;
 					if (m_la[1]) begin
-						f2_n    <= 2'd1;
+						f2_n    <= 3'd1;
 						f2_w[0] <= lw[15:0];
 					end
 					else begin
-						f2_n    <= 2'd2;
+						f2_n    <= 3'd2;
 						f2_w[0] <= lw[31:16];
 						f2_w[1] <= lw[15:0];
 					end
@@ -993,8 +1073,8 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 					st    <= S_RUN;
 				end
 				else begin
-					f2_n <= m_la[1] ? 2'd1 : 2'd2;
-					for (int i = 0; i < 2; i++) f2_w[i] <= 16'd0;
+					f2_n <= m_la[1] ? 3'd1 : 3'd2;
+					for (int i = 0; i < FW; i++) f2_w[i] <= 16'd0;
 					f2_f <= 1'b1; f2_d <= m_dem; f2_a <= 1'b0;
 					st   <= S_HALT;
 				end
@@ -1003,11 +1083,11 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 		S_CI: begin
 			if (busy && b_rvalid && !stale) begin
 				if (m_la[1]) begin
-					f2_n    <= 2'd1;
+					f2_n    <= 3'd1;
 					f2_w[0] <= b_rdata[15:0];
 				end
 				else begin
-					f2_n    <= 2'd2;
+					f2_n    <= 3'd2;
 					f2_w[0] <= b_rdata[31:16];
 					f2_w[1] <= b_rdata[15:0];
 				end
@@ -1033,7 +1113,7 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				busy  <= 1'b0;
 				stale <= 1'b0;
 				if (!stale) begin
-					f2_n    <= m_la[1] ? 2'd1 : 2'd2;
+					f2_n    <= m_la[1] ? 3'd1 : 3'd2;
 					f2_w[0] <= 16'd0;
 					f2_w[1] <= 16'd0;
 					f2_f <= 1'b1; f2_d <= m_dem; f2_a <= 1'b0;
@@ -1042,7 +1122,7 @@ qpc_r <= cfl ? {tq[0], 1'b0} + {30'd0, consume_t, 1'b0} : qpc_r + {28'd0, consum
 				else st <= S_RUN;
 			end
 			else if (!busy && !b_req_r && !b_gnt && !redir_any && !stop &&
-			         {1'b0, cnt} + {4'd0, f2_n} + {4'd0, f3_n} <= 6'(QN - 2))
+			         {1'b0, cnt} + {3'd0, f2_n} + {3'd0, f3_n} <= 6'(QN - 2))
 				b_req_r <= 1'b1;        // the next long word of the stream
 		end
 		default: ;

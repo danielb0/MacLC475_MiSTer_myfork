@@ -1425,7 +1425,9 @@ wire        ex_early = ex_mispred && !ex_u.ser && !ex_sr_we &&
 // instruction) is not held: the refill behind it is longer than its figure,
 // and holding it first would add to that.
 logic [5:0] pace_cnt;
-wire        pace_br   = (ex_u.br == BR_COND) && (ex_u.op == OP_BCC || ex_u.op == OP_DBCC);
+// (BRA and BSR reach EX as a Bcc that is always taken: their figure, 2,
+// has no shorter case -- only a true Bcc's 3 and a DBcc's 4 do)
+wire        pace_br   = (ex_u.br == BR_COND) && ((ex_u.op == OP_BCC && ex_u.tmin == 6'd3) || ex_u.op == OP_DBCC);
 wire  [5:0] pace_lo   = pace_br ? ex_u.tmin - 6'd1 : ex_u.tmin;
 wire        pace_tgt  = PACE && ex_v && ex_u.last && !ex_fault && (ex_u.exc == 8'd0) &&
                         (ex_u.tmin != 6'd0) &&

@@ -271,6 +271,48 @@ do not.
 - **Checked:** `tests/memsweep` 360 runs pass; `tests/run_cpu040.sh` smoke,
   lc040, machine, mmu, profile pass.
 
+## 9. A fetch is a half-line: four words a clock
+
+- **Documented:** MC68040UM 4.7.1: "For instruction prefetch requests that
+  hit in the cache, the half-line selected by physical address bit 3 is
+  multiplexed onto the internal instruction data bus." 7.3: the processor
+  prefetches by half-lines whatever the alignment.
+- **Before** (entry 8): one long word a clock, so three words took 1.45
+  clocks for 1 and five 2.45 for 2.
+- **Change** (`ap68040_fetch.sv`, parameter `HLF`; `cpu040.sv` sets it; not
+  with `BTIC`, whose target words are a long word):
+  - F0's address is where the chunk starts; F1 delivers from there to the
+    end of the half-line, or to the last word of the first branch the BTB
+    takes at or after it. F0 goes on at the next half-line.
+  - The cache's data is read a half-line at a time: two memories per way,
+    one per long word, each beat of a fill written to its own.
+  - The BTB is four arrays of half the rows (row PC[BTB_AW+1:3], array
+    PC[2:1]): the same entries and tags, all four read with the half-line.
+  - F2 and F3 carry four words; a second predecode table; the predecode
+    ring has four banks, one write each a cycle.
+  - F3 waits when the queue cannot take its words, so F0 needs room only
+    for the words ahead of its own chunk (which is then the one chunk that
+    can wait, with nothing behind it). With four words in each stage the
+    old rule would have stopped the fetch as entry 8 describes.
+- **After** (`SUITE=3`): three words 1.00, four 1.98, five 1.98 - 2.03,
+  `BRA.L` 1.98, a 3-word instruction at a branch target 3.02 for 3. Cold
+  code (instruction cache misses) is 10 to 20 percent quicker; sets 1 and
+  2 are unchanged or nearer their figures, none faster than the manual.
+- **Checked:** `tests/memsweep` 360 runs pass; `tests/run_cpu040.sh` smoke,
+  lc040, machine, mmu, profile pass; with `HLF` 0 the figures are entry
+  8's. Planted fault (F3 never waits): 24 of 24 memsweep runs fail.
+
+## 10. The pacer: BRA and BSR take 2 clocks
+
+- **Documented:** MC68040UM 10.5: BRA 2, BSR 1L + 1; Bcc 2 taken, 3 not.
+- **Defect (entry 3's):** BRA and BSR reach EX as a Bcc that is always
+  taken, and the pacer took a clock off every taken Bcc: they were held to
+  1 clock. The fetch's redirect hid it; with entry 9 `BRA.S` followed by a
+  3-word instruction took 2.70 clocks for 3.
+- **Change** (`ap68040_backend.sv` `pace_br`): the clock comes off only a
+  Bcc whose figure is 3 (a true conditional) and a DBcc.
+- **After:** `BRA.S` 1.98, `BRA.L` 1.98, the pair above 3.02.
+
 ## Notes from the instruction-supply sweep (tests/timing SUITE=3, 2026-11-27)
 
 Clocks per instruction, code cached, ideal memory; the manual's figure first.

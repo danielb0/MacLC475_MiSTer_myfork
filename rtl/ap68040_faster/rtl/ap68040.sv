@@ -26,6 +26,7 @@ module ap68040
 	parameter bit         PACE         = 0,      // instructions take the MC68040's documented clocks at least
 	parameter bit         DUAL         = 1,      // dual issue: the second slot (ap68040_pkg s1_t)
 	parameter bit         BTIC         = 1,      // the fetch BTB's target words
+	parameter bit         HLF          = 0,      // a fetch is a half-line, four words (not with BTIC)
 	parameter bit         DM_EARLY_TA  = 1,      // the DMU takes TA in its own clock (biu done_e)
 	parameter bit         DM_FAST_BUS  = 1,      // the DMU starts a store that misses the cache a clock sooner
 	// DUAL: the second slot's classes {load, An, Dn}.  Loads are off: on the
@@ -414,7 +415,7 @@ logic  [1:0] rq_n;
 dinst_t      rq0, rq1;
 logic        rq_pop, rq_pop_e;
 
-ap68040_fetch #(.BTIC(BTIC), .S1_CLASSES(S1_CLASSES), .S1_LDMASK(S1_LDMASK)) fetch (
+ap68040_fetch #(.BTIC(BTIC), .HLF(HLF), .S1_CLASSES(S1_CLASSES), .S1_LDMASK(S1_LDMASK)) fetch (
 	.clk(clk), .nreset(nreset),
 	.redir_v(redir_v), .redir_pc(redir_pc),
 	.d_redir_v(d_redir_v), .d_redir_pc(d_redir_pc),
