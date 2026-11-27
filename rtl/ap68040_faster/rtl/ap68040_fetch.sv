@@ -151,7 +151,13 @@ module ap68040_fetch
 	input  logic        b_rtci
 );
 
-localparam int QN = 8;            // (12: about 2% faster, 100 ALMs more)
+// The queue's words.  F1 to F3 cannot wait, so F0 fetches only while the
+// queue has room for everything on its way (room, below): six words with
+// each stage full.  At 8 that left room for a fetch only with the queue
+// empty, and an instruction of three words or more waited for the fetch
+// pipeline's latency again each time (2.45 clocks for three words, 5.47
+// for five); at 16 the fetch runs without a break, a long word a clock.
+localparam int QN = 16;
 
 // The instruction cache's own geometry, in place of the package's (which
 // the data cache keeps): CSB 8, 16 Kbytes, the largest whose set stays in

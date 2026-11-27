@@ -248,3 +248,45 @@ do not.
 - **A store across two cache lines** is left at 2 clocks (entry 6). Norton's
   Function test reads 1.07 of a Quadra 700 with it; the manual gives the two
   cache accesses and no time, and no better figure can be argued.
+
+## 8. The instruction queue: 8 words to 16
+
+- **Documented:** MC68040UM 10.4 - 10.6 give an instruction's clocks by its
+  operation and addressing modes, not its length: `MOVE.L #<xxx>,Dn` (three
+  words) takes 1 clock, `MOVE.L #<xxx>,(xxx).L` (five words) 2.
+- **Measured before** (`tests/timing`, `SUITE=3`, code cached): two words
+  1.22 clocks (long-aligned) and 1.64 (word-aligned), three words 2.45,
+  four 2.98, five 5.47.
+- **Cause:** `ap68040_fetch.sv` F1 to F3 cannot wait, so F0 fetches only
+  while the queue has room for every word on its way (`room`): six words
+  with each stage full. With `QN` 8 that was true only with the queue
+  empty, so the fetch ran in bursts, and an instruction of three words or
+  more waited for the fetch pipeline's three clocks again each time.
+- **Change:** `QN` 16. The fetch then runs without a break, one long word
+  a clock.
+- **After:** two words 1.00 at either alignment, three 1.45, four 1.98,
+  five 2.45. (`QN` 12: the same except five words, 2.95.) What is left is
+  the fetch's rate, two words a clock; MC68040UM 4.7.1 has a cache hit put
+  a half-line, four words, on the instruction bus.
+- **Checked:** `tests/memsweep` 360 runs pass; `tests/run_cpu040.sh` smoke,
+  lc040, machine, mmu, profile pass.
+
+## Notes from the instruction-supply sweep (tests/timing SUITE=3, 2026-11-27)
+
+Clocks per instruction, code cached, ideal memory; the manual's figure first.
+
+- **A wrong branch prediction costs about 9 clocks.** The MC68040 has no
+  history: Bcc 2 taken / 3 not, DBcc 3 / 4. Here a loop branch that always
+  goes one way is on the figure, one that alternates takes 18.6 for 9, a
+  DBcc's exit 13 for 4, a two-turn loop 18.4 for 8. Forward `BNE.S` taken
+  64 times in a row: 5.45 for 2, every other one mispredicted (not traced);
+  not taken in a row 5.4 for 3.
+- **Jumps through a register redirect at the end of the pipeline:**
+  `JSR d16(An)` + `RTS` 17 for 9, `LEA` + `JMP (An)` 14.5 for 5, `PEA` +
+  `RTS` (a return no call made) 17.5 for 9. `BSR`/`JSR (xxx).L` + `RTS`,
+  `BRA`, `JMP (xxx).L` and `JMP (d16,PC)` are on their figures; `BRA.L`
+  2.95 for 2.
+- **An instruction cache miss costs about 13 clocks a line with ideal
+  memory** (the bus: 5). After the last beat the fetch looks the line up
+  in the cache again (4 clocks to the queue), the words take 4 more
+  through decode to AG, and the next line's miss is found only then.
